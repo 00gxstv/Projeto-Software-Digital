@@ -1,0 +1,35 @@
+name: Publicar release Digital+
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publicar-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar arquivos do projeto
+        uses: actions/checkout@v4
+
+      - name: Criar release v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0.0 Digital-Mais-TCC.zip --repo "${{ github.repository }}" --target main --title "Digital+ v1.0.0 — Versão funcional" --notes "Primeira versão funcional do sistema Digital+.
+
+          Funcionalidades incluídas:
+          - Página institucional responsiva
+          - Tema claro e escuro
+          - Integração com VLibras
+          - Cadastro, login e controle de sessão
+          - Gestão de clientes e estoque
+          - Ordens de serviço integradas ao estoque
+          - Relatórios e notificações
+          - Impressão de comprovantes"

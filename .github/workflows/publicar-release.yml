@@ -1,4 +1,4 @@
-name: Publicar release Digital+
+name: Atualizar release Digital+
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     branches:
       - main
     paths:
+      - Digital-Mais-TCC.zip
       - .github/workflows/publicar-release.yml
 
 permissions:
@@ -18,18 +19,15 @@ jobs:
       - name: Baixar arquivos do projeto
         uses: actions/checkout@v4
 
-      - name: Criar release v1.0.0
+      - name: Verificar pacote
+        run: unzip -t Digital-Mais-TCC.zip
+
+      - name: Atualizar ZIP da release v1.0.0
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v1.0.0 Digital-Mais-TCC.zip --repo "${{ github.repository }}" --target main --title "Digital+ v1.0.0 — Versão funcional" --notes "Primeira versão funcional do sistema Digital+.
-
-          Funcionalidades incluídas:
-          - Página institucional responsiva
-          - Tema claro e escuro
-          - Integração com VLibras
-          - Cadastro, login e controle de sessão
-          - Gestão de clientes e estoque
-          - Ordens de serviço integradas ao estoque
-          - Relatórios e notificações
-          - Impressão de comprovantes"
+          if gh release view v1.0.0 --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload v1.0.0 Digital-Mais-TCC.zip --clobber --repo "${{ github.repository }}"
+          else
+            gh release create v1.0.0 Digital-Mais-TCC.zip --repo "${{ github.repository }}" --target main --title "Digital+ v1.0.0 — Versão funcional" --notes "Versão funcional do sistema Digital+."
+          fi

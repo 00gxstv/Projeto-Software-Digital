@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
 import Link from "next/link";
-import { getSession, RECOVERY_CODE_COOKIE } from "../lib/auth";
+import { getSession } from "../lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +22,6 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const sessionRequired = first(params.erro) === "sessao";
   const signedOut = first(params.sessao) === "encerrada";
   const passwordChanged = first(params.senha) === "alterada";
-  const recoveryCode = (await cookies()).get(RECOVERY_CODE_COOKIE)?.value ?? "";
 
   return (
     <main className="auth-page auth-page--login">
@@ -45,9 +43,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {registered && (
             <p className="auth-feedback auth-feedback--success" role="status">
-              Cadastro concluído. Agora faça login para entrar no sistema.
+              Confira seu e-mail para confirmar o cadastro. O acesso aos dados será liberado pela responsável da equipe.
             </p>
           )}
+          {["confirmar", "conexao", "link"].includes(first(params.erro)) && <p className="auth-feedback auth-feedback--error" role="alert">{first(params.erro) === "confirmar" ? "Confirme seu e-mail antes de entrar." : first(params.erro) === "link" ? "O link expirou ou foi aberto em outro navegador. Solicite um novo link e abra no mesmo navegador." : "Não foi possível conectar. Tente novamente em instantes."}</p>}
           {loginError && (
             <p className="auth-feedback auth-feedback--error" role="alert">
               E-mail ou senha incorretos. Confira os dados e tente novamente.
@@ -67,13 +66,6 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             <p className="auth-feedback auth-feedback--success" role="status">
               Senha alterada com segurança. Entre usando sua nova senha.
             </p>
-          )}
-          {recoveryCode && (
-            <aside className="recovery-code-card" aria-label="Código de recuperação">
-              <strong>Guarde seu código de recuperação</strong>
-              <code>{recoveryCode}</code>
-              <p>Ele é exibido por 15 minutos e será necessário caso você esqueça a senha. Não compartilhe com outras pessoas.</p>
-            </aside>
           )}
 
           <form className="auth-form" method="post" action="/api/auth/login">

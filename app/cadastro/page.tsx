@@ -10,6 +10,9 @@ type CadastroPageProps = {
 
 const errors: Record<string, string> = {
   "dados-invalidos": "Não foi possível validar os dados enviados. Tente novamente.",
+  cadastro: "Não foi possível criar a conta. Se já possui cadastro, entre ou recupere sua senha.",
+  limite: "Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.",
+  conexao: "Não foi possível conectar. Tente novamente em instantes.",
   nome: "Informe seu nome com pelo menos 2 caracteres.",
   email: "Digite um endereço de e-mail válido.",
   senha: "A senha precisa ter de 8 a 128 caracteres, com letras e números.",
@@ -34,7 +37,7 @@ export default async function CadastroPage({ searchParams }: CadastroPageProps) 
         </Link>
         <div className="auth-brand-copy">
           <h1>Vamos criar seu acesso.</h1>
-          <p>É rápido: depois do cadastro, você já poderá entrar no sistema.</p>
+          <p>Crie sua conta e peça à responsável da equipe para liberar seu acesso.</p>
         </div>
         <Link className="auth-back-link" href="/">← Voltar ao site institucional</Link>
       </section>
@@ -42,7 +45,7 @@ export default async function CadastroPage({ searchParams }: CadastroPageProps) 
       <section className="auth-form-panel">
         <div className="auth-card">
           <h2>Criar conta</h2>
-          <p>Use dados válidos para cadastrar seu acesso ao sistema.</p>
+          <p>Confirme seu e-mail após o cadastro. Só integrantes autorizados acessam os dados.</p>
 
           {errorMessage && (
             <p className="auth-feedback auth-feedback--error" role="alert">{errorMessage}</p>

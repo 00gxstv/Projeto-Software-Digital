@@ -43,3 +43,5 @@ next-env.d.ts
 /work/
 /app/lib/generated-auth-secret.ts
 /site-deploy.tar.gz
+*.tsbuildinfo
+/supabase/.temp/

@@ -20,6 +20,8 @@
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.2",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
     "react": "19.2.6",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@electric-sql/pglite": "0.5.8",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
@@ -44,5 +47,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "Projeto TCC \u2014 P\u00e1gina Institucional"
+  "displayName": "Projeto TCC — Página Institucional"
 }

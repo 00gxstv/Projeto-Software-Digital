@@ -1,17 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-type DashboardProps = { name: string; email: string; recoveryCode?: string };
+type DashboardProps = { name: string; email: string;  };
 type Theme = "light" | "dark";
 type View = "overview" | "orders" | "clients" | "stock" | "reports" | "notifications";
 type Modal = "client" | "stock" | "order" | "orderDetails" | null;
-type OrderStatus = "Em análise" | "Em reparo" | "Aguardando peça" | "Pronto" | "Entregue";
+type OrderStatus = "Em análise" | "Aguardando aprovação" | "Aprovado" | "Em reparo" | "Aguardando peça" | "Pronto" | "Entregue" | "Cancelado";
 type PaymentMethod = "A definir" | "Pix" | "Dinheiro" | "Cartão de crédito" | "Cartão de débito" | "Boleto";
 type PaymentStatus = "Pendente" | "Parcial" | "Pago";
 
 type Client = {
+  version: number;
   id: string;
   name: string;
   phone: string;
@@ -21,6 +22,8 @@ type Client = {
 };
 
 type StockItem = {
+  version: number;
+  productVersion: number;
   id: string;
   name: string;
   sku: string;
@@ -45,6 +48,7 @@ type OrderHistoryEntry = {
 };
 
 type ServiceOrder = {
+  version: number;
   id: string;
   clientId: string;
   device: string;
@@ -70,7 +74,7 @@ type SystemData = {
 
 const STORAGE_KEY = "digital-mais-system-v2";
 const EMPTY_DATA: SystemData = { clients: [], stock: [], orders: [] };
-const ORDER_STATUSES: OrderStatus[] = ["Em análise", "Em reparo", "Aguardando peça", "Pronto", "Entregue"];
+const ORDER_STATUSES: OrderStatus[] = ["Em análise", "Aguardando aprovação", "Aprovado", "Em reparo", "Aguardando peça", "Pronto", "Entregue", "Cancelado"];
 const PAYMENT_METHODS: PaymentMethod[] = ["A definir", "Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Boleto"];
 const PAYMENT_STATUSES: PaymentStatus[] = ["Pendente", "Parcial", "Pago"];
 
@@ -114,17 +118,6 @@ function money(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
-function createId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-    const bytes = crypto.getRandomValues(new Uint8Array(16));
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
-}
 
 function shortDate(value: string) {
   if (!value) return "—";
@@ -136,31 +129,6 @@ function dateTime(value: string) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
-function normalizeOrder(value: Partial<ServiceOrder>): ServiceOrder {
-  const now = new Date().toISOString();
-  return {
-    id: String(value.id ?? `OS-${Date.now()}`),
-    clientId: String(value.clientId ?? ""),
-    device: String(value.device ?? ""),
-    service: String(value.service ?? ""),
-    status: ORDER_STATUSES.includes(value.status as OrderStatus) ? value.status as OrderStatus : "Em análise",
-    technician: String(value.technician ?? ""),
-    dueDate: String(value.dueDate ?? ""),
-    paymentMethod: PAYMENT_METHODS.includes(value.paymentMethod as PaymentMethod) ? value.paymentMethod as PaymentMethod : "A definir",
-    paymentStatus: PAYMENT_STATUSES.includes(value.paymentStatus as PaymentStatus) ? value.paymentStatus as PaymentStatus : "Pendente",
-    notes: String(value.notes ?? ""),
-    parts: Array.isArray(value.parts) ? value.parts.filter((part) => part && Number(part.quantity) > 0).map((part) => ({
-      stockItemId: String(part.stockItemId ?? ""),
-      name: String(part.name ?? "Peça removida"),
-      quantity: Math.max(1, Number(part.quantity) || 1),
-      unitPrice: Math.max(0, Number(part.unitPrice) || 0),
-    })) : [],
-    history: Array.isArray(value.history) ? value.history : [],
-    value: Math.max(0, Number(value.value) || 0),
-    createdAt: String(value.createdAt ?? now),
-    updatedAt: String(value.updatedAt ?? value.createdAt ?? now),
-  };
-}
 
 function statusClass(status: OrderStatus) {
   const slug = status.toLowerCase().replaceAll(" ", "-").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -171,7 +139,7 @@ function safeCsv(value: string | number) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
-export default function Dashboard({ name, email, recoveryCode = "" }: DashboardProps) {
+export default function Dashboard({ name, email }: DashboardProps) {
   const [theme, setTheme] = useState<Theme>("light");
   const [activeView, setActiveView] = useState<View>("overview");
   const [query, setQuery] = useState("");
@@ -179,43 +147,101 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
   const [reportStart, setReportStart] = useState("");
   const [reportEnd, setReportEnd] = useState("");
   const [systemMessage, setSystemMessage] = useState("");
-  const [showRecoveryCode, setShowRecoveryCode] = useState(Boolean(recoveryCode));
+
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [data, setData] = useState<SystemData>(EMPTY_DATA);
   const [hydrated, setHydrated] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [stores, setStores] = useState<Array<{ id: string; name: string }>>([]);
+  const [storeId, setStoreId] = useState("");
+  const [hasLocalData, setHasLocalData] = useState(false);
+  const storeRef = useRef("");
+  const busyRef = useRef(false);
+  const requestRef = useRef(0);
+  const modalRef = useRef<Modal>(null);
+  modalRef.current = modal;
+
+  const reloadData = useCallback(async (store = storeRef.current) => {
+    const request = ++requestRef.current;
+    const response = await fetch("/api/erp" + (store ? "?store=" + encodeURIComponent(store) : ""), { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Não foi possível carregar os dados.");
+    if (request !== requestRef.current || (modalRef.current && !busyRef.current)) return;
+    setData({ clients: result.clients, stock: result.stock, orders: result.orders });
+    setStores(result.stores);
+    storeRef.current = result.storeId ?? "";
+    setStoreId(result.storeId ?? "");
+    setLoadError("");
+    setHydrated(true);
+  }, []);
+
+  const mutate = async (action: string, payload: unknown) => {
+    if (busyRef.current) return false;
+    if (!storeRef.current || loadError) { window.alert("Atualize os dados e selecione uma loja antes de salvar."); return false; }
+    busyRef.current = true;
+    setBusy(true);
+    ++requestRef.current;
+    let saved = false;
+    try {
+      const response = await fetch("/api/erp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, storeId: storeRef.current, payload }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Não foi possível salvar.");
+      saved = true;
+      await reloadData();
+      setSystemMessage("Alterações salvas no banco da equipe.");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha de conexão.";
+      if (saved) {
+        setLoadError("A alteração foi salva, mas a atualização da tela falhou. Clique em atualizar; não repita o cadastro.");
+        return true;
+      }
+      window.alert(message);
+      // Não repete escritas: uma falha de rede pode ocorrer depois do commit.
+      setLoadError("Atualize os dados antes de continuar. " + message);
+      return false;
+    } finally { busyRef.current = false; setBusy(false); }
+  };
+
+  const switchStore = async (id: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setModal(null); setEditingId(null);
+    try { await reloadData(id); }
+    catch (error) { setLoadError(error instanceof Error ? error.message : "Falha ao carregar a loja."); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+
+  const downloadLocalBackup = () => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
+    const url = URL.createObjectURL(new Blob([saved], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = "digital-mais-dados-locais.json"; link.click(); URL.revokeObjectURL(url);
+  };
 
   const firstName = name.trim().split(/\s+/)[0] || "usuário";
   const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      const savedTheme = localStorage.getItem("digital-mais-theme") as Theme | null;
-      const initialTheme: Theme = savedTheme === "dark" ? "dark" : "light";
-      setTheme(initialTheme);
-      document.documentElement.dataset.theme = initialTheme;
-
       try {
-        const savedData = localStorage.getItem(STORAGE_KEY);
-        if (savedData) {
-          const parsed = JSON.parse(savedData) as Partial<SystemData>;
-          setData({
-            clients: Array.isArray(parsed.clients) ? parsed.clients : [],
-            stock: Array.isArray(parsed.stock) ? parsed.stock : [],
-            orders: Array.isArray(parsed.orders) ? parsed.orders.map((order) => normalizeOrder(order)) : [],
-          });
-        }
-      } catch {
-        localStorage.removeItem(STORAGE_KEY);
-      }
-      setHydrated(true);
+        const initialTheme: Theme = localStorage.getItem("digital-mais-theme") === "dark" ? "dark" : "light";
+        setTheme(initialTheme);
+        document.documentElement.dataset.theme = initialTheme;
+        const legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        setHasLocalData(Boolean(legacy.clients?.length || legacy.stock?.length || legacy.orders?.length));
+      } catch { /* Dados locais permanecem intactos. */ }
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  useEffect(() => {
-    if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data, hydrated]);
+    const refresh = () => {
+      if (busyRef.current || modalRef.current || document.visibilityState === "hidden") return;
+      void reloadData().catch((error) => setLoadError(error instanceof Error ? error.message : "Falha de conexão."));
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    return () => { window.cancelAnimationFrame(frame); window.clearInterval(interval); window.removeEventListener("focus", refresh); ++requestRef.current; };
+  }, [reloadData]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -233,7 +259,7 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
 
   const clientById = useMemo(() => new Map(data.clients.map((client) => [client.id, client])), [data.clients]);
   const lowStock = useMemo(() => data.stock.filter((item) => item.quantity <= item.minimum), [data.stock]);
-  const openOrders = useMemo(() => data.orders.filter((order) => order.status !== "Entregue"), [data.orders]);
+  const openOrders = useMemo(() => data.orders.filter((order) => order.status !== "Entregue" && order.status !== "Cancelado"), [data.orders]);
   const readyOrders = useMemo(() => data.orders.filter((order) => order.status === "Pronto"), [data.orders]);
   const waitingPieceOrders = useMemo(() => data.orders.filter((order) => order.status === "Aguardando peça"), [data.orders]);
   const deliveredOrders = useMemo(() => data.orders.filter((order) => order.status === "Entregue"), [data.orders]);
@@ -246,7 +272,7 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
   }), [data.orders, reportEnd, reportStart]);
   const reportDeliveredOrders = useMemo(() => reportOrders.filter((order) => order.status === "Entregue"), [reportOrders]);
   const reportRevenue = reportDeliveredOrders.reduce((total, order) => total + order.value, 0);
-  const reportProjectedRevenue = reportOrders.reduce((total, order) => total + order.value, 0);
+  const reportProjectedRevenue = reportOrders.filter((order) => order.status !== "Cancelado").reduce((total, order) => total + order.value, 0);
   const normalizedQuery = query.trim().toLocaleLowerCase("pt-BR");
 
   const filteredOrders = useMemo(() => data.orders.filter((order) => {
@@ -286,164 +312,59 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
       changeView("clients");
       return;
     }
+    if (busyRef.current || loadError || !storeRef.current) return;
+    modalRef.current = type;
     setEditingId(id ?? null);
     setModal(type);
   };
 
   function closeModal() {
+    if (busyRef.current) return;
     setModal(null);
     setEditingId(null);
   }
 
-  const saveClient = (event: FormEvent<HTMLFormElement>) => {
+  const saveClient = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const record: Client = {
-      id: editingClient?.id ?? createId(),
-      name: String(form.get("name") ?? "").trim(),
-      phone: String(form.get("phone") ?? "").trim(),
-      email: String(form.get("email") ?? "").trim(),
-      document: String(form.get("document") ?? "").trim(),
-      createdAt: editingClient?.createdAt ?? new Date().toISOString(),
-    };
-    setData((current) => ({ ...current, clients: editingClient ? current.clients.map((client) => client.id === record.id ? record : client) : [record, ...current.clients] }));
-    closeModal();
+    if (await mutate("saveClient", { id: editingClient?.id, version: editingClient?.version, name: form.get("name"), phone: form.get("phone"), email: form.get("email"), document: form.get("document") })) closeModal();
   };
 
-  const saveStock = (event: FormEvent<HTMLFormElement>) => {
+  const saveStock = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const record: StockItem = {
-      id: editingStock?.id ?? createId(),
-      name: String(form.get("name") ?? "").trim(),
-      sku: String(form.get("sku") ?? "").trim(),
-      quantity: Math.max(0, Number(form.get("quantity") ?? 0)),
-      minimum: Math.max(0, Number(form.get("minimum") ?? 0)),
-      cost: Math.max(0, Number(form.get("cost") ?? 0)),
-      price: Math.max(0, Number(form.get("price") ?? 0)),
-      createdAt: editingStock?.createdAt ?? new Date().toISOString(),
-    };
-    setData((current) => ({ ...current, stock: editingStock ? current.stock.map((item) => item.id === record.id ? record : item) : [record, ...current.stock] }));
-    closeModal();
+    if (await mutate("saveStock", { id: editingStock?.id, version: editingStock?.version, productVersion: editingStock?.productVersion, name: form.get("name"), sku: form.get("sku"), quantity: Number(form.get("quantity")), minimum: Number(form.get("minimum")), cost: Number(form.get("cost")), price: Number(form.get("price")) })) closeModal();
   };
 
-  const saveOrder = (event: FormEvent<HTMLFormElement>) => {
+  const saveOrder = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const now = new Date();
     const parts = data.stock.flatMap((item) => {
-      const quantity = Math.max(0, Math.floor(Number(form.get(`part-${item.id}`) ?? 0)));
-      const previousPart = editingOrder?.parts.find((part) => part.stockItemId === item.id);
-      return quantity > 0 ? [{ stockItemId: item.id, name: previousPart?.name ?? item.name, quantity, unitPrice: previousPart?.unitPrice ?? item.price }] : [];
+      const quantity = Number(form.get("part-" + item.id) ?? 0);
+      const previous = editingOrder?.parts.find((part) => part.stockItemId === item.id);
+      return quantity > 0 ? [{ stockItemId: item.id, quantity, unitPrice: previous?.unitPrice ?? item.price }] : [];
     });
-
-    const previousPartQuantity = new Map((editingOrder?.parts ?? []).map((part) => [part.stockItemId, part.quantity]));
-    const unavailable = parts.find((part) => {
-      const item = data.stock.find((stockItem) => stockItem.id === part.stockItemId);
-      return !item || part.quantity > item.quantity + (previousPartQuantity.get(part.stockItemId) ?? 0);
-    });
-
-    if (unavailable) {
-      const item = data.stock.find((stockItem) => stockItem.id === unavailable.stockItemId);
-      const available = (item?.quantity ?? 0) + (previousPartQuantity.get(unavailable.stockItemId) ?? 0);
-      window.alert(`Estoque insuficiente para ${unavailable.name}. Disponível para esta ordem: ${available} unidade(s).`);
-      return;
-    }
-
-    const history = editingOrder?.history ?? [];
-    const changes: string[] = [];
-    if (editingOrder) {
-      if (editingOrder.status !== String(form.get("status"))) changes.push(`Status alterado de ${editingOrder.status} para ${String(form.get("status"))}`);
-      if (editingOrder.paymentStatus !== String(form.get("paymentStatus"))) changes.push(`Pagamento alterado para ${String(form.get("paymentStatus"))}`);
-      const previousParts = editingOrder.parts.reduce((total, part) => total + part.quantity, 0);
-      const nextParts = parts.reduce((total, part) => total + part.quantity, 0);
-      if (previousParts !== nextParts || editingOrder.parts.some((part) => !parts.some((next) => next.stockItemId === part.stockItemId && next.quantity === part.quantity))) changes.push("Peças utilizadas atualizadas");
-      if (changes.length === 0) changes.push("Dados da ordem atualizados");
-    }
-    const initialActions = ["Ordem criada"];
-    if (!editingOrder && parts.length > 0) {
-      initialActions.push(`Peças baixadas do estoque: ${parts.map((part) => `${part.name} (${part.quantity})`).join(", ")}`);
-    }
-
-    const record: ServiceOrder = {
-      id: editingOrder?.id ?? `OS-${String(now.getTime()).slice(-6)}`,
-      clientId: String(form.get("clientId") ?? ""),
-      device: String(form.get("device") ?? "").trim(),
-      service: String(form.get("service") ?? "").trim(),
-      status: String(form.get("status") ?? "Em análise") as OrderStatus,
-      technician: String(form.get("technician") ?? "").trim(),
-      dueDate: String(form.get("dueDate") ?? ""),
-      paymentMethod: String(form.get("paymentMethod") ?? "A definir") as PaymentMethod,
-      paymentStatus: String(form.get("paymentStatus") ?? "Pendente") as PaymentStatus,
-      notes: String(form.get("notes") ?? "").trim(),
-      parts,
-      history: [...history, ...(editingOrder ? changes : initialActions).map((action) => ({ id: createId(), at: now.toISOString(), action }))],
-      value: Math.max(0, Number(form.get("value") ?? 0)),
-      createdAt: editingOrder?.createdAt ?? now.toISOString(),
-      updatedAt: now.toISOString(),
-    };
-
-    const newPartQuantity = new Map(parts.map((part) => [part.stockItemId, part.quantity]));
-    const newlyLowStock = data.stock.filter((item) => {
-      const nextQuantity = item.quantity + (previousPartQuantity.get(item.id) ?? 0) - (newPartQuantity.get(item.id) ?? 0);
-      return item.quantity > item.minimum && nextQuantity <= item.minimum;
-    });
-
-    setData((current) => {
-      const stock = current.stock.map((item) => ({
-        ...item,
-        quantity: item.quantity + (previousPartQuantity.get(item.id) ?? 0) - (newPartQuantity.get(item.id) ?? 0),
-      }));
-      const orders = editingOrder ? current.orders.map((order) => order.id === record.id ? record : order) : [record, ...current.orders];
-      return { ...current, stock, orders };
-    });
-    setSystemMessage(newlyLowStock.length > 0
-      ? `Ordem salva. ${newlyLowStock.map((item) => item.name).join(", ")} atingiu o estoque mínimo e gerou uma notificação.`
-      : "Ordem de serviço salva e estoque atualizado automaticamente.");
-    closeModal();
-    setActiveView("orders");
+    // Preserva peças históricas de produtos inativos que não aparecem no formulário.
+    for (const part of editingOrder?.parts ?? []) if (!data.stock.some((item) => item.id === part.stockItemId)) parts.push(part);
+    const record = { id: editingOrder?.id, version: editingOrder?.version, clientId: form.get("clientId"), device: form.get("device"), service: form.get("service"), status: form.get("status"), technician: form.get("technician"), dueDate: form.get("dueDate"), paymentMethod: form.get("paymentMethod"), paymentStatus: form.get("paymentStatus"), notes: form.get("notes"), parts, value: Number(form.get("value")) };
+    if (record.status === "Cancelado" && !window.confirm("Cancelar esta ordem? As peças serão devolvidas ao estoque.")) return;
+    if (await mutate("saveOrder", record)) { closeModal(); setActiveView("orders"); }
   };
 
-  const deleteClient = (client: Client) => {
-    if (data.orders.some((order) => order.clientId === client.id)) {
-      window.alert("Este cliente possui ordens vinculadas e não pode ser excluído.");
-      return;
-    }
-    if (window.confirm(`Excluir o cliente ${client.name}?`)) setData((current) => ({ ...current, clients: current.clients.filter((item) => item.id !== client.id) }));
+  const deleteClient = async (client: Client) => {
+    if (window.confirm("Excluir o cliente " + client.name + "?")) await mutate("deleteClient", { id: client.id, version: client.version });
   };
-
-  const deleteStock = (item: StockItem) => {
-    if (data.orders.some((order) => order.parts.some((part) => part.stockItemId === item.id))) {
-      window.alert("Este produto está vinculado a uma ordem de serviço e não pode ser excluído.");
-      return;
-    }
-    if (window.confirm(`Excluir ${item.name} do estoque?`)) setData((current) => ({ ...current, stock: current.stock.filter((record) => record.id !== item.id) }));
+  const deleteStock = async (item: StockItem) => {
+    if (window.confirm("Retirar " + item.name + " desta loja? O saldo precisa estar zerado.")) await mutate("deleteStock", { id: item.id, version: item.version, productVersion: item.productVersion });
   };
-
-  const deleteOrder = (order: ServiceOrder) => {
-    const message = order.parts.length > 0 ? `Excluir a ordem ${order.id}? As peças utilizadas serão devolvidas ao estoque.` : `Excluir a ordem ${order.id}?`;
-    if (window.confirm(message)) setData((current) => ({
-      ...current,
-      stock: current.stock.map((item) => ({
-        ...item,
-        quantity: item.quantity + (order.parts.find((part) => part.stockItemId === item.id)?.quantity ?? 0),
-      })),
-      orders: current.orders.filter((record) => record.id !== order.id),
-    }));
+  const deleteOrder = async (order: ServiceOrder) => {
+    if (window.confirm("Excluir a ordem " + order.id + "? As peças serão devolvidas ao estoque.")) await mutate("deleteOrder", { id: order.id, version: order.version });
   };
-
-  const changeQuantity = (id: string, amount: number) => {
-    setData((current) => ({ ...current, stock: current.stock.map((item) => item.id === id ? { ...item, quantity: Math.max(0, item.quantity + amount) } : item) }));
-  };
-
-  const changeOrderStatus = (id: string, status: OrderStatus) => {
-    const now = new Date().toISOString();
-    setData((current) => ({ ...current, orders: current.orders.map((order) => order.id === id ? {
-      ...order,
-      status,
-      updatedAt: now,
-      history: [...order.history, { id: createId(), at: now, action: `Status alterado de ${order.status} para ${status}` }],
-    } : order) }));
+  const changeQuantity = async (id: string, amount: number) => { await mutate("quantity", { id, amount }); };
+  const changeOrderStatus = async (id: string, status: OrderStatus) => {
+    if (status === "Cancelado" && !window.confirm("Cancelar esta ordem e devolver as peças ao estoque?")) return;
+    const order = data.orders.find((item) => item.id === id);
+    if (order) await mutate("status", { id, status, version: order.version });
   };
 
   const printOrder = (order: ServiceOrder) => {
@@ -506,7 +427,7 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
   const viewUsesSearch = activeView === "orders" || activeView === "clients" || activeView === "stock";
 
   return (
-    <main className="dashboard-shell">
+    <main className="dashboard-shell" aria-busy={busy}>
       <header className="dashboard-app-header">
         <div className="dashboard-app-header__main">
           <Link className="dashboard-brand" href="/" aria-label="Voltar ao site institucional">
@@ -514,14 +435,14 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
             <span><strong>Digital+ ERP</strong><small>Assistência técnica</small></span>
           </Link>
           <div className="dashboard-operation-context" aria-label="Resumo da operação">
-            <span><i /> Operação ativa</span>
+            <label>Unidade <select aria-label="Selecionar loja" value={storeId} disabled={busy} onChange={(event) => void switchStore(event.target.value)}>{stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
             <strong>{openOrders.length} atendimento(s) em andamento</strong>
           </div>
           <div className="dashboard-top-actions">
             <button className="dashboard-icon-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Ativar tema claro" : "Ativar tema escuro"}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>
             <button className={`dashboard-icon-button dashboard-notification ${activeView === "notifications" ? "dashboard-icon-button--active" : ""}`} type="button" onClick={() => changeView("notifications")} aria-label={`Abrir notificações: ${notificationCount} alerta(s)`}><Icon name="bell" />{notificationCount > 0 && <span>{notificationCount}</span>}</button>
             <details className="dashboard-account">
-              <summary aria-label="Abrir opções da conta"><span className="profile-avatar">{initials || "DM"}</span><span><strong>{firstName}</strong><small>Administrador</small></span></summary>
+              <summary aria-label="Abrir opções da conta"><span className="profile-avatar">{initials || "DM"}</span><span><strong>{firstName}</strong><small>Equipe</small></span></summary>
               <div className="dashboard-account-menu">
                 <div><strong>{name}</strong><small>{email}</small></div>
                 <Link href="/"><Icon name="home" size={17} /> Site institucional</Link>
@@ -544,9 +465,12 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
 
       <section className="dashboard-workspace">
         <div className="dashboard-content">
-          {showRecoveryCode && recoveryCode && <aside className="system-recovery-banner" aria-label="Código de recuperação"><div><strong>Guarde seu código de recuperação</strong><code>{recoveryCode}</code><p>Você precisará dele se esquecer a senha. O código é renovado após cada recuperação.</p></div><button type="button" onClick={() => setShowRecoveryCode(false)} aria-label="Fechar aviso"><Icon name="close" size={17} /></button></aside>}
+          {hasLocalData && <aside className="system-feedback"><span>Existem dados da versão anterior salvos neste navegador. Eles ainda não foram transferidos para o banco.</span><button type="button" onClick={downloadLocalBackup}>Baixar cópia</button></aside>}
+          {busy && <div className="system-feedback" role="status">Salvando ou carregando dados da equipe...</div>}
+          {loadError && <div className="system-feedback" role="alert"><span>{loadError}</span><button type="button" disabled={busy} onClick={() => void switchStore(storeId)}>Atualizar dados</button></div>}
+          {hydrated && stores.length === 0 && <div className="system-feedback" role="alert">Cadastre as unidades na tabela lojas do Supabase, com nome, endereço e ativo marcado, para iniciar os atendimentos.</div>}
           {systemMessage && <div className="system-feedback" role="status"><Icon name="bell" size={18} /><span>{systemMessage}</span><button type="button" onClick={() => setSystemMessage("")} aria-label="Fechar mensagem"><Icon name="close" size={16} /></button></div>}
-          {!hydrated ? <div className="module-loading">Carregando seus dados...</div> : <>
+          {!hydrated ? <div className="module-loading">{loadError ? "Aguardando conexão com o banco." : "Carregando seus dados..."}</div> : <>
             {activeView === "overview" && <Overview name={firstName} clients={data.clients} stock={data.stock} orders={data.orders} clientById={clientById} lowStock={lowStock} openOrders={openOrders} revenue={revenue} onNewOrder={() => openModal("order")} onView={changeView} onStatusView={openOrdersByStatus} />}
             {activeView === "orders" && <OrdersView orders={filteredOrders} clients={clientById} statusFilter={statusFilter} onStatusFilter={setStatusFilter} onNew={() => openModal("order")} onDetails={(id) => openModal("orderDetails", id)} onEdit={(id) => openModal("order", id)} onPrint={printOrder} onDelete={deleteOrder} onStatus={changeOrderStatus} />}
             {activeView === "clients" && <ClientsView clients={filteredClients} onNew={() => openModal("client")} onEdit={(id) => openModal("client", id)} onDelete={deleteClient} />}
@@ -560,10 +484,12 @@ export default function Dashboard({ name, email, recoveryCode = "" }: DashboardP
       {modal && <div className="system-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}>
         <section className={`system-modal ${modal === "order" || modal === "orderDetails" ? "system-modal--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
           <button className="system-modal-close" type="button" onClick={closeModal} aria-label="Fechar"><Icon name="close" /></button>
+          <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           {modal === "client" && <ClientForm client={editingClient} onSubmit={saveClient} />}
           {modal === "stock" && <StockForm item={editingStock} onSubmit={saveStock} />}
           {modal === "order" && <OrderForm clients={data.clients} stock={data.stock} order={editingOrder} onSubmit={saveOrder} />}
           {modal === "orderDetails" && editingOrder && <OrderDetails order={editingOrder} client={clientById.get(editingOrder.clientId)} onEdit={() => openModal("order", editingOrder.id)} onPrint={() => printOrder(editingOrder)} />}
+          </fieldset>
         </section>
       </div>}
     </main>

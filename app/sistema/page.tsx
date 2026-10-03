@@ -1,14 +1,14 @@
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
-import { getSession, RECOVERY_CODE_COOKIE } from "../lib/auth";
+import { getSession } from "../lib/auth";
+import { createClient } from "../lib/supabase/server";
 import Dashboard from "./dashboard";
 
 export const dynamic = "force-dynamic";
-
 export default async function SistemaPage() {
   const session = await getSession();
   if (!session) redirect("/login?erro=sessao");
-  const recoveryCode = (await cookies()).get(RECOVERY_CODE_COOKIE)?.value ?? "";
-
-  return <Dashboard name={session.name} email={session.email} recoveryCode={recoveryCode} />;
+  const client = await createClient();
+  const { data: access, error } = await client.from("digital_mais_acessos").select("user_id").eq("user_id", session.id).eq("ativo", true).maybeSingle();
+  if (error || !access) return <main className="auth-page"><section className="auth-form-panel"><div className="auth-card"><h1>{error ? "Conexão em configuração" : "Aguardando liberação"}</h1><p>{error ? "Não foi possível verificar seu acesso. Tente novamente; se persistir, peça à responsável para conferir a configuração do banco." : "Sua conta foi criada. Peça à responsável pelo banco para liberar este e-mail na equipe."}</p><p>{session.email}</p><a className="auth-submit" href="/sistema">Verificar novamente</a><form method="post" action="/api/auth/logout"><button className="secondary-action" type="submit">Sair</button></form></div></section></main>;
+  return <Dashboard name={session.name} email={session.email} />;
 }

@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import {
   ACCOUNT_COOKIE,
+  RECOVERY_CODE_COOKIE,
   SESSION_COOKIE,
   absoluteAppUrl,
   accountCookieOptions,
   cleanName,
-  createAccountToken,
+  createAccountBundle,
   normalizeEmail,
   requestHasValidOrigin,
+  recoveryCodeCookieOptions,
   validEmail,
   validPassword,
 } from "../../../lib/auth";
@@ -40,13 +42,14 @@ export async function POST(request: Request) {
   if (!validPassword(password)) return redirectWithError(request, "senha");
   if (password !== passwordConfirmation) return redirectWithError(request, "confirmacao");
 
-  const accountToken = await createAccountToken(name, email, password);
+  const { accountToken, recoveryCode } = await createAccountBundle(name, email, password);
   const loginUrl = absoluteAppUrl(request, "/login");
   loginUrl.searchParams.set("cadastro", "sucesso");
   loginUrl.searchParams.set("email", email);
 
   const response = NextResponse.redirect(loginUrl, 303);
   response.cookies.set(ACCOUNT_COOKIE, accountToken, accountCookieOptions());
+  response.cookies.set(RECOVERY_CODE_COOKIE, recoveryCode, recoveryCodeCookieOptions());
   response.cookies.delete(SESSION_COOKIE);
   return response;
 }

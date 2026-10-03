@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 import {
   ACCOUNT_COOKIE,
+  RECOVERY_CODE_COOKIE,
   SESSION_COOKIE,
   absoluteAppUrl,
+  accountCookieOptions,
   cookieFromRequest,
+  createAccountBundle,
   createSessionToken,
   normalizeEmail,
   passwordMatches,
   readAccountToken,
   requestHasValidOrigin,
+  recoveryCodeCookieOptions,
   sessionCookieOptions,
 } from "../../../lib/auth";
 
@@ -42,5 +46,10 @@ export async function POST(request: Request) {
   const sessionToken = await createSessionToken(account.name, account.email);
   const response = NextResponse.redirect(absoluteAppUrl(request, "/sistema"), 303);
   response.cookies.set(SESSION_COOKIE, sessionToken, sessionCookieOptions());
+  if (account.v === 1) {
+    const upgraded = await createAccountBundle(account.name, account.email, password);
+    response.cookies.set(ACCOUNT_COOKIE, upgraded.accountToken, accountCookieOptions());
+    response.cookies.set(RECOVERY_CODE_COOKIE, upgraded.recoveryCode, recoveryCodeCookieOptions());
+  }
   return response;
 }

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import Link from "next/link";
-import { getSession } from "../lib/auth";
+import { getSession, RECOVERY_CODE_COOKIE } from "../lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -21,19 +22,18 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const loginError = first(params.erro) === "credenciais";
   const sessionRequired = first(params.erro) === "sessao";
   const signedOut = first(params.sessao) === "encerrada";
+  const passwordChanged = first(params.senha) === "alterada";
+  const recoveryCode = (await cookies()).get(RECOVERY_CODE_COOKIE)?.value ?? "";
 
   return (
-    <main className="auth-page">
+    <main className="auth-page auth-page--login">
       <section className="auth-brand-panel" aria-label="Digital Mais">
         <Link href="/" aria-label="Voltar para a página inicial">
           <img className="brand-logo" src="/digital-mais-logo.png" alt="Digital Mais Acessórios" />
         </Link>
         <div className="auth-brand-copy">
-          <span>ÁREA DO SISTEMA</span>
-          <h1>Bem-vindo de volta.</h1>
-          <p>
-            Entre com os dados cadastrados para acessar o painel de gestão da Digital+.
-          </p>
+          <h1>Olá, que bom ver você.</h1>
+          <p>Entre para continuar o atendimento da Digital+.</p>
         </div>
         <Link className="auth-back-link" href="/">← Voltar ao site institucional</Link>
       </section>
@@ -63,6 +63,18 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               Sua sessão foi encerrada com segurança.
             </p>
           )}
+          {passwordChanged && (
+            <p className="auth-feedback auth-feedback--success" role="status">
+              Senha alterada com segurança. Entre usando sua nova senha.
+            </p>
+          )}
+          {recoveryCode && (
+            <aside className="recovery-code-card" aria-label="Código de recuperação">
+              <strong>Guarde seu código de recuperação</strong>
+              <code>{recoveryCode}</code>
+              <p>Ele é exibido por 15 minutos e será necessário caso você esqueça a senha. Não compartilhe com outras pessoas.</p>
+            </aside>
+          )}
 
           <form className="auth-form" method="post" action="/api/auth/login">
             <div className="form-field">
@@ -90,6 +102,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 required
               />
             </div>
+            <Link className="forgot-password-link" href="/esqueci-senha">Esqueci minha senha</Link>
             <button className="auth-submit" type="submit">Entrar no sistema</button>
           </form>
 

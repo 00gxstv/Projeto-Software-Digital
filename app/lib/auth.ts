@@ -1,19 +1,34 @@
 import { cookies } from "next/headers";
+import { GENERATED_AUTH_SECRET } from "./generated-auth-secret";
 
 export const ACCOUNT_COOKIE = "digital_mais_account";
 export const SESSION_COOKIE = "digital_mais_session";
+export const RECOVERY_CODE_COOKIE = "digital_mais_recovery_code";
 
 const ACCOUNT_MAX_AGE = 60 * 60 * 24 * 90;
 const SESSION_MAX_AGE = 60 * 60 * 8;
-const PBKDF2_ITERATIONS = 120_000;
+const RECOVERY_CODE_MAX_AGE = 60 * 15;
+// Cloudflare Workers supports PBKDF2 iteration counts up to 100,000.
+const PBKDF2_ITERATIONS = 100_000;
 const encoder = new TextEncoder();
 
-type RegisteredAccount = {
+type RegisteredAccountV1 = {
   v: 1;
   name: string;
   email: string;
   salt: string;
   passwordHash: string;
+  createdAt: number;
+};
+
+export type RegisteredAccount = RegisteredAccountV1 | {
+  v: 2;
+  name: string;
+  email: string;
+  salt: string;
+  passwordHash: string;
+  recoverySalt: string;
+  recoveryHash: string;
   createdAt: number;
 };
 
@@ -27,10 +42,11 @@ export type AuthSession = {
 };
 
 function authSecret(): string {
-  return (
-    process.env.AUTH_SECRET ??
-    "digital-mais-tcc-demo-cookie-signing-key-2026"
-  );
+  const secret = process.env.AUTH_SECRET ?? GENERATED_AUTH_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("AUTH_SECRET must be configured with at least 32 characters.");
+  }
+  return secret;
 }
 
 function bytesToBase64Url(bytes: Uint8Array<ArrayBufferLike>): string {
@@ -144,28 +160,43 @@ export async function hashPassword(password: string, salt: string): Promise<stri
   return bytesToBase64Url(new Uint8Array(bits));
 }
 
-export async function createAccountToken(
+function generateRecoveryCode(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const characters = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]);
+  return characters.join("").match(/.{1,4}/g)?.join("-") ?? characters.join("");
+}
+
+function normalizeRecoveryCode(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+export async function createAccountBundle(
   name: string,
   email: string,
   password: string,
-): Promise<string> {
+): Promise<{ accountToken: string; recoveryCode: string }> {
   const salt = randomToken();
+  const recoverySalt = randomToken();
+  const recoveryCode = generateRecoveryCode();
   const account: RegisteredAccount = {
-    v: 1,
+    v: 2,
     name,
     email,
     salt,
     passwordHash: await hashPassword(password, salt),
+    recoverySalt,
+    recoveryHash: await hashPassword(normalizeRecoveryCode(recoveryCode), recoverySalt),
     createdAt: Date.now(),
   };
-  return signPayload(account);
+  return { accountToken: await signPayload(account), recoveryCode };
 }
 
 export async function readAccountToken(token: string | undefined): Promise<RegisteredAccount | null> {
   const account = await verifyPayload<RegisteredAccount>(token);
   if (
     !account ||
-    account.v !== 1 ||
+    (account.v !== 1 && account.v !== 2) ||
     !account.name ||
     !validEmail(account.email) ||
     !account.salt ||
@@ -174,6 +205,33 @@ export async function readAccountToken(token: string | undefined): Promise<Regis
     return null;
   }
   return account;
+}
+
+export function accountHasRecoveryCode(account: RegisteredAccount): account is Extract<RegisteredAccount, { v: 2 }> {
+  return account.v === 2 && Boolean(account.recoverySalt) && Boolean(account.recoveryHash);
+}
+
+export async function recoveryCodeMatches(account: RegisteredAccount, recoveryCode: string): Promise<boolean> {
+  if (!accountHasRecoveryCode(account)) return false;
+  const normalizedCode = normalizeRecoveryCode(recoveryCode);
+  if (normalizedCode.length !== 16) return false;
+  const candidate = await hashPassword(normalizedCode, account.recoverySalt);
+  const expectedBytes = base64UrlToBytes(account.recoveryHash);
+  const candidateBytes = base64UrlToBytes(candidate);
+  if (expectedBytes.length !== candidateBytes.length) return false;
+
+  let difference = 0;
+  for (let index = 0; index < expectedBytes.length; index += 1) {
+    difference |= expectedBytes[index] ^ candidateBytes[index];
+  }
+  return difference === 0;
+}
+
+export async function resetAccountPassword(
+  account: RegisteredAccount,
+  password: string,
+): Promise<{ accountToken: string; recoveryCode: string }> {
+  return createAccountBundle(account.name, account.email, password);
 }
 
 export async function passwordMatches(account: RegisteredAccount, password: string): Promise<boolean> {
@@ -229,6 +287,7 @@ export function cookieOptions(maxAge: number) {
 
 export const accountCookieOptions = () => cookieOptions(ACCOUNT_MAX_AGE);
 export const sessionCookieOptions = () => cookieOptions(SESSION_MAX_AGE);
+export const recoveryCodeCookieOptions = () => cookieOptions(RECOVERY_CODE_MAX_AGE);
 
 export function cookieFromRequest(request: Request, name: string): string | undefined {
   const cookieHeader = request.headers.get("cookie") ?? "";

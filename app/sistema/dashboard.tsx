@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-type DashboardProps = { name: string; email: string };
+type DashboardProps = { name: string; email: string; recoveryCode?: string };
 type Theme = "light" | "dark";
 type View = "overview" | "orders" | "clients" | "stock" | "reports" | "notifications";
 type Modal = "client" | "stock" | "order" | "orderDetails" | null;
@@ -114,6 +114,18 @@ function money(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
+function createId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 function shortDate(value: string) {
   if (!value) return "—";
   const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T12:00:00`) : new Date(value);
@@ -159,12 +171,15 @@ function safeCsv(value: string | number) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
-export default function Dashboard({ name, email }: DashboardProps) {
+export default function Dashboard({ name, email, recoveryCode = "" }: DashboardProps) {
   const [theme, setTheme] = useState<Theme>("light");
-  const [menuOpen, setMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState<View>("overview");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"Todos" | OrderStatus>("Todos");
+  const [reportStart, setReportStart] = useState("");
+  const [reportEnd, setReportEnd] = useState("");
+  const [systemMessage, setSystemMessage] = useState("");
+  const [showRecoveryCode, setShowRecoveryCode] = useState(Boolean(recoveryCode));
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [data, setData] = useState<SystemData>(EMPTY_DATA);
@@ -176,8 +191,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const savedTheme = localStorage.getItem("digital-mais-theme") as Theme | null;
-      const preferred: Theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-      const initialTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : preferred;
+      const initialTheme: Theme = savedTheme === "dark" ? "dark" : "light";
       setTheme(initialTheme);
       document.documentElement.dataset.theme = initialTheme;
 
@@ -211,6 +225,12 @@ export default function Dashboard({ name, email }: DashboardProps) {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, []);
 
+  useEffect(() => {
+    if (!systemMessage) return;
+    const timeout = window.setTimeout(() => setSystemMessage(""), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [systemMessage]);
+
   const clientById = useMemo(() => new Map(data.clients.map((client) => [client.id, client])), [data.clients]);
   const lowStock = useMemo(() => data.stock.filter((item) => item.quantity <= item.minimum), [data.stock]);
   const openOrders = useMemo(() => data.orders.filter((order) => order.status !== "Entregue"), [data.orders]);
@@ -219,8 +239,14 @@ export default function Dashboard({ name, email }: DashboardProps) {
   const deliveredOrders = useMemo(() => data.orders.filter((order) => order.status === "Entregue"), [data.orders]);
   const notificationCount = lowStock.length + readyOrders.length + waitingPieceOrders.length;
   const revenue = deliveredOrders.reduce((total, order) => total + order.value, 0);
-  const projectedRevenue = data.orders.reduce((total, order) => total + order.value, 0);
   const stockValue = data.stock.reduce((total, item) => total + item.cost * item.quantity, 0);
+  const reportOrders = useMemo(() => data.orders.filter((order) => {
+    const orderDate = order.createdAt.slice(0, 10);
+    return (!reportStart || orderDate >= reportStart) && (!reportEnd || orderDate <= reportEnd);
+  }), [data.orders, reportEnd, reportStart]);
+  const reportDeliveredOrders = useMemo(() => reportOrders.filter((order) => order.status === "Entregue"), [reportOrders]);
+  const reportRevenue = reportDeliveredOrders.reduce((total, order) => total + order.value, 0);
+  const reportProjectedRevenue = reportOrders.reduce((total, order) => total + order.value, 0);
   const normalizedQuery = query.trim().toLocaleLowerCase("pt-BR");
 
   const filteredOrders = useMemo(() => data.orders.filter((order) => {
@@ -239,8 +265,12 @@ export default function Dashboard({ name, email }: DashboardProps) {
 
   const changeView = (view: View) => {
     setActiveView(view);
-    setMenuOpen(false);
     setQuery("");
+  };
+
+  const openOrdersByStatus = (status: OrderStatus) => {
+    setStatusFilter(status);
+    changeView("orders");
   };
 
   const toggleTheme = () => {
@@ -269,7 +299,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const record: Client = {
-      id: editingClient?.id ?? crypto.randomUUID(),
+      id: editingClient?.id ?? createId(),
       name: String(form.get("name") ?? "").trim(),
       phone: String(form.get("phone") ?? "").trim(),
       email: String(form.get("email") ?? "").trim(),
@@ -284,7 +314,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const record: StockItem = {
-      id: editingStock?.id ?? crypto.randomUUID(),
+      id: editingStock?.id ?? createId(),
       name: String(form.get("name") ?? "").trim(),
       sku: String(form.get("sku") ?? "").trim(),
       quantity: Math.max(0, Number(form.get("quantity") ?? 0)),
@@ -330,6 +360,10 @@ export default function Dashboard({ name, email }: DashboardProps) {
       if (previousParts !== nextParts || editingOrder.parts.some((part) => !parts.some((next) => next.stockItemId === part.stockItemId && next.quantity === part.quantity))) changes.push("Peças utilizadas atualizadas");
       if (changes.length === 0) changes.push("Dados da ordem atualizados");
     }
+    const initialActions = ["Ordem criada"];
+    if (!editingOrder && parts.length > 0) {
+      initialActions.push(`Peças baixadas do estoque: ${parts.map((part) => `${part.name} (${part.quantity})`).join(", ")}`);
+    }
 
     const record: ServiceOrder = {
       id: editingOrder?.id ?? `OS-${String(now.getTime()).slice(-6)}`,
@@ -343,22 +377,29 @@ export default function Dashboard({ name, email }: DashboardProps) {
       paymentStatus: String(form.get("paymentStatus") ?? "Pendente") as PaymentStatus,
       notes: String(form.get("notes") ?? "").trim(),
       parts,
-      history: [...history, ...(editingOrder ? changes : ["Ordem criada"]).map((action) => ({ id: crypto.randomUUID(), at: now.toISOString(), action }))],
+      history: [...history, ...(editingOrder ? changes : initialActions).map((action) => ({ id: createId(), at: now.toISOString(), action }))],
       value: Math.max(0, Number(form.get("value") ?? 0)),
       createdAt: editingOrder?.createdAt ?? now.toISOString(),
       updatedAt: now.toISOString(),
     };
 
+    const newPartQuantity = new Map(parts.map((part) => [part.stockItemId, part.quantity]));
+    const newlyLowStock = data.stock.filter((item) => {
+      const nextQuantity = item.quantity + (previousPartQuantity.get(item.id) ?? 0) - (newPartQuantity.get(item.id) ?? 0);
+      return item.quantity > item.minimum && nextQuantity <= item.minimum;
+    });
+
     setData((current) => {
-      const oldPartQuantity = new Map((editingOrder?.parts ?? []).map((part) => [part.stockItemId, part.quantity]));
-      const newPartQuantity = new Map(parts.map((part) => [part.stockItemId, part.quantity]));
       const stock = current.stock.map((item) => ({
         ...item,
-        quantity: item.quantity + (oldPartQuantity.get(item.id) ?? 0) - (newPartQuantity.get(item.id) ?? 0),
+        quantity: item.quantity + (previousPartQuantity.get(item.id) ?? 0) - (newPartQuantity.get(item.id) ?? 0),
       }));
       const orders = editingOrder ? current.orders.map((order) => order.id === record.id ? record : order) : [record, ...current.orders];
       return { ...current, stock, orders };
     });
+    setSystemMessage(newlyLowStock.length > 0
+      ? `Ordem salva. ${newlyLowStock.map((item) => item.name).join(", ")} atingiu o estoque mínimo e gerou uma notificação.`
+      : "Ordem de serviço salva e estoque atualizado automaticamente.");
     closeModal();
     setActiveView("orders");
   };
@@ -401,7 +442,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
       ...order,
       status,
       updatedAt: now,
-      history: [...order.history, { id: crypto.randomUUID(), at: now, action: `Status alterado de ${order.status} para ${status}` }],
+      history: [...order.history, { id: createId(), at: now, action: `Status alterado de ${order.status} para ${status}` }],
     } : order) }));
   };
 
@@ -420,21 +461,23 @@ export default function Dashboard({ name, email }: DashboardProps) {
   };
 
   const exportReports = () => {
+    const period = reportStart || reportEnd ? `${reportStart ? shortDate(reportStart) : "Início"} a ${reportEnd ? shortDate(reportEnd) : "Hoje"}` : "Todos os registros";
     const rows = [
       ["RELATÓRIO DIGITAL+"],
       ["Gerado em", new Date().toLocaleString("pt-BR")],
+      ["Período", period],
+      ["Faturamento concluído", reportRevenue],
+      ["Serviços concluídos", reportDeliveredOrders.length],
+      ["Ordens no período", reportOrders.length],
+      ["Produtos com estoque baixo", lowStock.length],
       [],
-      ["CLIENTES"],
-      ["Nome", "Telefone", "E-mail", "CPF/CNPJ"],
-      ...data.clients.map((client) => [client.name, client.phone, client.email, client.document]),
-      [],
-      ["ESTOQUE"],
+      ["PRODUTOS COM ESTOQUE BAIXO"],
       ["Produto", "SKU", "Quantidade", "Mínimo", "Custo", "Preço"],
-      ...data.stock.map((item) => [item.name, item.sku, item.quantity, item.minimum, item.cost, item.price]),
+      ...lowStock.map((item) => [item.name, item.sku, item.quantity, item.minimum, item.cost, item.price]),
       [],
-      ["ORDENS DE SERVIÇO"],
+      ["ORDENS DE SERVIÇO DO PERÍODO"],
       ["Ordem", "Cliente", "Aparelho", "Serviço", "Status", "Técnico", "Prazo", "Pagamento", "Situação do pagamento", "Peças utilizadas", "Valor", "Abertura"],
-      ...data.orders.map((order) => [order.id, clientById.get(order.clientId)?.name ?? "Cliente removido", order.device, order.service, order.status, order.technician, shortDate(order.dueDate), order.paymentMethod, order.paymentStatus, order.parts.map((part) => `${part.name} (${part.quantity})`).join(", "), order.value, shortDate(order.createdAt)]),
+      ...reportOrders.map((order) => [order.id, clientById.get(order.clientId)?.name ?? "Cliente removido", order.device, order.service, order.status, order.technician, shortDate(order.dueDate), order.paymentMethod, order.paymentStatus, order.parts.map((part) => `${part.name} (${part.quantity})`).join(", "), order.value, shortDate(order.createdAt)]),
     ];
     const csv = `\uFEFF${rows.map((row) => row.map(safeCsv).join(";")).join("\n")}`;
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -445,51 +488,70 @@ export default function Dashboard({ name, email }: DashboardProps) {
     URL.revokeObjectURL(url);
   };
 
+  const printReports = () => {
+    const popup = window.open("", "_blank", "width=1000,height=760");
+    if (!popup) {
+      window.alert("O navegador bloqueou a exportação. Permita pop-ups para este site e tente novamente.");
+      return;
+    }
+    const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] ?? character);
+    const period = reportStart || reportEnd ? `${reportStart ? shortDate(reportStart) : "Início"} a ${reportEnd ? shortDate(reportEnd) : "Hoje"}` : "Todos os registros";
+    const statusRows = ORDER_STATUSES.map((status) => `<tr><td>${escapeHtml(status)}</td><td>${reportOrders.filter((order) => order.status === status).length}</td></tr>`).join("");
+    const stockRows = lowStock.length === 0 ? "<tr><td colspan='3'>Nenhum produto abaixo do mínimo.</td></tr>" : lowStock.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${item.quantity}</td><td>${item.minimum}</td></tr>`).join("");
+    popup.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório Digital+</title><style>body{font:14px Arial,sans-serif;color:#171717;margin:36px}header{border-bottom:3px solid #e5007d;padding-bottom:18px;margin-bottom:24px}h1{margin:0 0 6px}.period{color:#666}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:24px 0}.kpis div{padding:14px;background:#f4f4f7;border-radius:8px}.kpis span{display:block;color:#666;font-size:11px}.kpis strong{display:block;margin-top:6px;font-size:19px}section{margin-top:24px}h2{font-size:17px}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #ddd;text-align:left}th{background:#f3f3f5}@media print{body{margin:12mm}}</style></head><body><header><h1>Relatório Digital+ Acessórios</h1><div class="period">${escapeHtml(period)} · Gerado em ${escapeHtml(new Date().toLocaleString("pt-BR"))}</div></header><div class="kpis"><div><span>Faturamento concluído</span><strong>${escapeHtml(money(reportRevenue))}</strong></div><div><span>Serviços concluídos</span><strong>${reportDeliveredOrders.length}</strong></div><div><span>Ordens no período</span><strong>${reportOrders.length}</strong></div><div><span>Estoque baixo</span><strong>${lowStock.length}</strong></div></div><section><h2>Ordens por status</h2><table><thead><tr><th>Status</th><th>Quantidade</th></tr></thead><tbody>${statusRows}</tbody></table></section><section><h2>Produtos com estoque baixo</h2><table><thead><tr><th>Produto</th><th>Quantidade</th><th>Mínimo</th></tr></thead><tbody>${stockRows}</tbody></table></section><script>window.onload=()=>window.print();<\/script></body></html>`);
+    popup.document.close();
+  };
+
   const searchPlaceholder = activeView === "clients" ? "Buscar cliente..." : activeView === "stock" ? "Buscar produto ou SKU..." : "Buscar ordem, cliente ou aparelho...";
   const viewUsesSearch = activeView === "orders" || activeView === "clients" || activeView === "stock";
 
   return (
     <main className="dashboard-shell">
-      <aside className={`dashboard-sidebar ${menuOpen ? "dashboard-sidebar--open" : ""}`} aria-label="Navegação do sistema">
-        <div className="dashboard-sidebar-head">
-          <Link href="/" aria-label="Voltar ao site institucional"><img src="/digital-mais-logo.png" alt="Digital Mais Acessórios" /></Link>
-          <button type="button" className="dashboard-close-menu" onClick={() => setMenuOpen(false)} aria-label="Fechar menu"><Icon name="close" /></button>
-        </div>
-        <nav className="dashboard-nav">
-          <span className="dashboard-nav-label">MENU PRINCIPAL</span>
-          {navItems.map((item) => (
-            <button className={`dashboard-nav-link ${activeView === item.id ? "dashboard-nav-link--active" : ""}`} type="button" key={item.id} onClick={() => changeView(item.id)}>
-              <Icon name={item.icon} /><span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="dashboard-sidebar-foot">
-          <Link className="dashboard-nav-link" href="/"><Icon name="home" /><span>Site institucional</span></Link>
-          <form method="post" action="/api/auth/logout"><button className="dashboard-nav-link dashboard-logout" type="submit"><Icon name="logout" /><span>Sair da conta</span></button></form>
-          <div className="sidebar-profile"><span className="profile-avatar">{initials || "DM"}</span><div><strong>{name}</strong><small>{email}</small></div></div>
-        </div>
-      </aside>
-
-      {menuOpen && <button type="button" className="dashboard-backdrop" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
-
-      <section className="dashboard-workspace">
-        <header className="dashboard-topbar">
-          <button type="button" className="dashboard-menu-button" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Icon name="menu" /></button>
-          {viewUsesSearch ? <div className="dashboard-search"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={searchPlaceholder} aria-label={searchPlaceholder} /></div> : <div className="dashboard-page-name">Digital+ <span>/ {navItems.find((item) => item.id === activeView)?.label}</span></div>}
+      <header className="dashboard-app-header">
+        <div className="dashboard-app-header__main">
+          <Link className="dashboard-brand" href="/" aria-label="Voltar ao site institucional">
+            <img src="/digital-mais-logo.png" alt="Digital Mais Acessórios" />
+            <span><strong>Digital+ ERP</strong><small>Assistência técnica</small></span>
+          </Link>
+          <div className="dashboard-operation-context" aria-label="Resumo da operação">
+            <span><i /> Operação ativa</span>
+            <strong>{openOrders.length} atendimento(s) em andamento</strong>
+          </div>
           <div className="dashboard-top-actions">
             <button className="dashboard-icon-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Ativar tema claro" : "Ativar tema escuro"}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>
             <button className={`dashboard-icon-button dashboard-notification ${activeView === "notifications" ? "dashboard-icon-button--active" : ""}`} type="button" onClick={() => changeView("notifications")} aria-label={`Abrir notificações: ${notificationCount} alerta(s)`}><Icon name="bell" />{notificationCount > 0 && <span>{notificationCount}</span>}</button>
-            <div className="dashboard-mini-profile"><span className="profile-avatar">{initials || "DM"}</span><div><strong>{firstName}</strong><small>Administrador</small></div></div>
+            <details className="dashboard-account">
+              <summary aria-label="Abrir opções da conta"><span className="profile-avatar">{initials || "DM"}</span><span><strong>{firstName}</strong><small>Administrador</small></span></summary>
+              <div className="dashboard-account-menu">
+                <div><strong>{name}</strong><small>{email}</small></div>
+                <Link href="/"><Icon name="home" size={17} /> Site institucional</Link>
+                <form method="post" action="/api/auth/logout"><button type="submit"><Icon name="logout" size={17} /> Sair da conta</button></form>
+              </div>
+            </details>
           </div>
-        </header>
+        </div>
+        <div className="dashboard-navigation-row">
+          <nav className="dashboard-nav" aria-label="Módulos do sistema">
+            {navItems.map((item) => (
+              <button className={`dashboard-nav-link ${activeView === item.id ? "dashboard-nav-link--active" : ""}`} type="button" key={item.id} onClick={() => changeView(item.id)} aria-current={activeView === item.id ? "page" : undefined}>
+                <Icon name={item.icon} size={18} /><span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          {viewUsesSearch ? <div className="dashboard-search"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={searchPlaceholder} aria-label={searchPlaceholder} /></div> : <div className="dashboard-page-name"><span>Módulo atual</span><strong>{navItems.find((item) => item.id === activeView)?.label}</strong></div>}
+        </div>
+      </header>
 
+      <section className="dashboard-workspace">
         <div className="dashboard-content">
+          {showRecoveryCode && recoveryCode && <aside className="system-recovery-banner" aria-label="Código de recuperação"><div><strong>Guarde seu código de recuperação</strong><code>{recoveryCode}</code><p>Você precisará dele se esquecer a senha. O código é renovado após cada recuperação.</p></div><button type="button" onClick={() => setShowRecoveryCode(false)} aria-label="Fechar aviso"><Icon name="close" size={17} /></button></aside>}
+          {systemMessage && <div className="system-feedback" role="status"><Icon name="bell" size={18} /><span>{systemMessage}</span><button type="button" onClick={() => setSystemMessage("")} aria-label="Fechar mensagem"><Icon name="close" size={16} /></button></div>}
           {!hydrated ? <div className="module-loading">Carregando seus dados...</div> : <>
-            {activeView === "overview" && <Overview name={firstName} clients={data.clients} stock={data.stock} orders={data.orders} clientById={clientById} lowStock={lowStock} openOrders={openOrders} revenue={revenue} onNewOrder={() => openModal("order")} onView={changeView} />}
+            {activeView === "overview" && <Overview name={firstName} clients={data.clients} stock={data.stock} orders={data.orders} clientById={clientById} lowStock={lowStock} openOrders={openOrders} revenue={revenue} onNewOrder={() => openModal("order")} onView={changeView} onStatusView={openOrdersByStatus} />}
             {activeView === "orders" && <OrdersView orders={filteredOrders} clients={clientById} statusFilter={statusFilter} onStatusFilter={setStatusFilter} onNew={() => openModal("order")} onDetails={(id) => openModal("orderDetails", id)} onEdit={(id) => openModal("order", id)} onPrint={printOrder} onDelete={deleteOrder} onStatus={changeOrderStatus} />}
             {activeView === "clients" && <ClientsView clients={filteredClients} onNew={() => openModal("client")} onEdit={(id) => openModal("client", id)} onDelete={deleteClient} />}
             {activeView === "stock" && <StockView stock={filteredStock} onNew={() => openModal("stock")} onEdit={(id) => openModal("stock", id)} onDelete={deleteStock} onQuantity={changeQuantity} />}
-            {activeView === "reports" && <ReportsView orders={data.orders} stock={data.stock} clientsCount={data.clients.length} revenue={revenue} projectedRevenue={projectedRevenue} stockValue={stockValue} onExport={exportReports} />}
+            {activeView === "reports" && <ReportsView orders={reportOrders} stock={data.stock} lowStock={lowStock} clientsCount={data.clients.length} revenue={reportRevenue} projectedRevenue={reportProjectedRevenue} stockValue={stockValue} start={reportStart} end={reportEnd} onStart={setReportStart} onEnd={setReportEnd} onExport={exportReports} onPrint={printReports} />}
             {activeView === "notifications" && <NotificationsView lowStock={lowStock} readyOrders={readyOrders} waitingPieceOrders={waitingPieceOrders} clients={clientById} onView={changeView} />}
           </>}
         </div>
@@ -509,17 +571,33 @@ export default function Dashboard({ name, email }: DashboardProps) {
 }
 
 function PageHeader({ eyebrow, title, text, action }: { eyebrow: string; title: string; text: string; action?: React.ReactNode }) {
-  return <section className="module-header"><div><span>{eyebrow}</span><h1>{title}</h1><p>{text}</p></div>{action}</section>;
+  const labels: Record<string, string> = {
+    ATENDIMENTOS: "Atendimentos",
+    RELACIONAMENTO: "Cadastro e histórico",
+    "CONTROLE DE PEÇAS": "Peças e acessórios",
+    ANÁLISE: "Resultados da operação",
+    ACOMPANHAMENTO: "Pendências da equipe",
+  };
+  return <section className="module-header"><div><span>{labels[eyebrow] ?? eyebrow}</span><h1>{title}</h1><p>{text}</p></div>{action}</section>;
 }
 
 function EmptyState({ icon, title, text, action }: { icon: string; title: string; text: string; action?: React.ReactNode }) {
   return <div className="module-empty"><span><Icon name={icon} size={26} /></span><h3>{title}</h3><p>{text}</p>{action}</div>;
 }
 
-function Overview({ name, clients, stock, orders, clientById, lowStock, openOrders, revenue, onNewOrder, onView }: { name: string; clients: Client[]; stock: StockItem[]; orders: ServiceOrder[]; clientById: Map<string, Client>; lowStock: StockItem[]; openOrders: ServiceOrder[]; revenue: number; onNewOrder: () => void; onView: (view: View) => void }) {
+function Overview({ name, clients, stock, orders, clientById, lowStock, openOrders, revenue, onNewOrder, onView, onStatusView }: { name: string; clients: Client[]; stock: StockItem[]; orders: ServiceOrder[]; clientById: Map<string, Client>; lowStock: StockItem[]; openOrders: ServiceOrder[]; revenue: number; onNewOrder: () => void; onView: (view: View) => void; onStatusView: (status: OrderStatus) => void }) {
   const ready = orders.filter((order) => order.status === "Pronto").length;
   return <>
-    <PageHeader eyebrow="PAINEL OPERACIONAL" title={`Olá, ${name}.`} text="Acompanhe os registros atuais da assistência técnica." action={<button className="dashboard-primary-action" type="button" onClick={onNewOrder}><Icon name="plus" size={18} /> Nova ordem de serviço</button>} />
+    <PageHeader eyebrow="Hoje na assistência" title={`Olá, ${name}.`} text="Veja o que precisa de atenção e continue os atendimentos de onde parou." action={<button className="dashboard-primary-action" type="button" onClick={onNewOrder}><Icon name="plus" size={18} /> Nova ordem de serviço</button>} />
+    <section className="service-flow" aria-label="Fluxo das ordens de serviço">
+      <div className="service-flow__intro"><span>Fluxo da oficina</span><strong>Acompanhe cada etapa</strong><small>Clique em uma etapa para abrir as ordens correspondentes.</small></div>
+      <div className="service-flow__steps">
+        {ORDER_STATUSES.map((status, index) => {
+          const count = orders.filter((order) => order.status === status).length;
+          return <button type="button" key={status} onClick={() => onStatusView(status)}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{status}</strong><small>{count} ordem(ns)</small></div></button>;
+        })}
+      </div>
+    </section>
     <section className="dashboard-kpis" aria-label="Resumo do negócio">
       <article className="dashboard-kpi"><div><span>Ordens abertas</span><strong>{openOrders.length}</strong><small>{orders.length} ordens cadastradas</small></div><span className="kpi-mark kpi-mark--pink">OS</span></article>
       <article className="dashboard-kpi"><div><span>Clientes</span><strong>{clients.length}</strong><small>cadastros ativos</small></div><span className="kpi-mark kpi-mark--blue">CL</span></article>
@@ -527,8 +605,8 @@ function Overview({ name, clients, stock, orders, clientById, lowStock, openOrde
       <article className="dashboard-kpi"><div><span>Faturamento concluído</span><strong>{money(revenue)}</strong><small>ordens marcadas como entregues</small></div><span className="kpi-mark kpi-mark--dark">R$</span></article>
     </section>
     <section className="dashboard-grid dashboard-grid--summary">
-      <article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>ATENDIMENTOS</span><h2>Ordens recentes</h2></div><button className="panel-link" type="button" onClick={() => onView("orders")}>Ver todas</button></div>{orders.length === 0 ? <EmptyState icon="file" title="Nenhuma ordem cadastrada" text="Crie a primeira ordem de serviço para acompanhar os atendimentos." action={<button className="text-action" type="button" onClick={onNewOrder}>Criar ordem</button>} /> : <div className="compact-list">{orders.slice(0, 5).map((order) => <div key={order.id}><div><strong>{order.id} · {clientById.get(order.clientId)?.name ?? "Cliente removido"}</strong><small>{order.device} — {order.service}</small></div><span className={statusClass(order.status)}>{order.status}</span></div>)}</div>}</article>
-      <article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>ESTOQUE</span><h2>Itens para reposição</h2></div><button className="panel-link" type="button" onClick={() => onView("stock")}>Abrir estoque</button></div>{stock.length === 0 ? <EmptyState icon="box" title="Estoque vazio" text="Cadastre produtos para controlar quantidades e reposição." /> : lowStock.length === 0 ? <EmptyState icon="box" title="Estoque em dia" text="Nenhum item atingiu a quantidade mínima." /> : <div className="stock-alert-list">{lowStock.slice(0, 5).map((item) => <div className="stock-alert" key={item.id}><span className="stock-alert-icon">!</span><div><strong>{item.name}</strong><small>Mínimo: {item.minimum}</small></div><b>{item.quantity} un.</b></div>)}</div>}</article>
+      <article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>Atendimentos</span><h2>Ordens recentes</h2></div><button className="panel-link" type="button" onClick={() => onView("orders")}>Ver todas</button></div>{orders.length === 0 ? <EmptyState icon="file" title="Nenhuma ordem cadastrada" text="Crie a primeira ordem de serviço para acompanhar os atendimentos." action={<button className="text-action" type="button" onClick={onNewOrder}>Criar ordem</button>} /> : <div className="compact-list">{orders.slice(0, 5).map((order) => <div key={order.id}><div><strong>{order.id} · {clientById.get(order.clientId)?.name ?? "Cliente removido"}</strong><small>{order.device} — {order.service}</small></div><span className={statusClass(order.status)}>{order.status}</span></div>)}</div>}</article>
+      <article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>Estoque</span><h2>Itens para reposição</h2></div><button className="panel-link" type="button" onClick={() => onView("stock")}>Abrir estoque</button></div>{stock.length === 0 ? <EmptyState icon="box" title="Estoque vazio" text="Cadastre produtos para controlar quantidades e reposição." /> : lowStock.length === 0 ? <EmptyState icon="box" title="Estoque em dia" text="Nenhum item atingiu a quantidade mínima." /> : <div className="stock-alert-list">{lowStock.slice(0, 5).map((item) => <div className="stock-alert" key={item.id}><span className="stock-alert-icon">!</span><div><strong>{item.name}</strong><small>Mínimo: {item.minimum}</small></div><b>{item.quantity} un.</b></div>)}</div>}</article>
     </section>
   </>;
 }
@@ -545,9 +623,47 @@ function StockView({ stock, onNew, onEdit, onDelete, onQuantity }: { stock: Stoc
   return <><PageHeader eyebrow="CONTROLE DE PEÇAS" title="Estoque" text="Cadastre produtos e registre entradas ou saídas de quantidade." action={<button className="dashboard-primary-action" type="button" onClick={onNew}><Icon name="plus" size={18} /> Novo produto</button>} /><section className="dashboard-panel module-panel"><div className="module-toolbar"><strong>Produtos cadastrados</strong><span>{stock.length} registro(s)</span></div>{stock.length === 0 ? <EmptyState icon="box" title="Nenhum produto encontrado" text="Adicione o primeiro item para começar o controle de estoque." action={<button className="text-action" type="button" onClick={onNew}>Adicionar produto</button>} /> : <div className="orders-table-wrap"><table className="orders-table"><thead><tr><th>Produto</th><th>SKU</th><th>Quantidade</th><th>Estoque mínimo</th><th>Custo</th><th>Venda</th><th>Ações</th></tr></thead><tbody>{stock.map((item) => <tr key={item.id}><td><strong>{item.name}</strong>{item.quantity <= item.minimum && <small className="danger-text">Reposição necessária</small>}</td><td>{item.sku || "—"}</td><td><div className="quantity-control"><button type="button" onClick={() => onQuantity(item.id, -1)} aria-label={`Retirar uma unidade de ${item.name}`}><Icon name="minus" size={14} /></button><strong>{item.quantity}</strong><button type="button" onClick={() => onQuantity(item.id, 1)} aria-label={`Adicionar uma unidade de ${item.name}`}><Icon name="plus" size={14} /></button></div></td><td>{item.minimum}</td><td>{money(item.cost)}</td><td>{money(item.price)}</td><td><div className="row-actions"><button className="row-action" type="button" onClick={() => onEdit(item.id)} aria-label={`Editar ${item.name}`}><Icon name="edit" size={17} /></button><button className="row-action row-action--danger" type="button" onClick={() => onDelete(item)} aria-label={`Excluir ${item.name}`}><Icon name="trash" size={17} /></button></div></td></tr>)}</tbody></table></div>}</section></>;
 }
 
-function ReportsView({ orders, stock, clientsCount, revenue, projectedRevenue, stockValue, onExport }: { orders: ServiceOrder[]; stock: StockItem[]; clientsCount: number; revenue: number; projectedRevenue: number; stockValue: number; onExport: () => void }) {
+function ReportsView({ orders, stock, lowStock, clientsCount, revenue, projectedRevenue, stockValue, start, end, onStart, onEnd, onExport, onPrint }: { orders: ServiceOrder[]; stock: StockItem[]; lowStock: StockItem[]; clientsCount: number; revenue: number; projectedRevenue: number; stockValue: number; start: string; end: string; onStart: (value: string) => void; onEnd: (value: string) => void; onExport: () => void; onPrint: () => void }) {
   const maxCount = Math.max(1, ...ORDER_STATUSES.map((status) => orders.filter((order) => order.status === status).length));
-  return <><PageHeader eyebrow="ANÁLISE" title="Relatórios" text="Resultados calculados com base nos registros do sistema." action={<button className="dashboard-primary-action" type="button" onClick={onExport}><Icon name="download" size={18} /> Exportar CSV</button>} /><section className="report-kpis"><article><span>Faturamento concluído</span><strong>{money(revenue)}</strong><small>Ordens entregues</small></article><article><span>Valores previstos</span><strong>{money(projectedRevenue)}</strong><small>Todas as ordens</small></article><article><span>Valor do estoque</span><strong>{money(stockValue)}</strong><small>Quantidade × custo</small></article><article><span>Clientes cadastrados</span><strong>{clientsCount}</strong><small>Cadastros ativos</small></article></section><section className="dashboard-grid dashboard-grid--summary"><article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>ORDENS</span><h2>Distribuição por status</h2></div></div>{orders.length === 0 ? <EmptyState icon="chart" title="Sem dados para analisar" text="Os gráficos serão atualizados quando houver ordens cadastradas." /> : <div className="report-bars">{ORDER_STATUSES.map((status) => { const count = orders.filter((order) => order.status === status).length; return <div key={status}><div><span>{status}</span><strong>{count}</strong></div><div className="report-bar-track"><span style={{ width: `${(count / maxCount) * 100}%` }} /></div></div>; })}</div>}</article><article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>ESTOQUE</span><h2>Situação atual</h2></div></div><div className="report-summary-list"><div><span>Produtos cadastrados</span><strong>{stock.length}</strong></div><div><span>Unidades disponíveis</span><strong>{stock.reduce((total, item) => total + item.quantity, 0)}</strong></div><div><span>Itens para reposição</span><strong>{stock.filter((item) => item.quantity <= item.minimum).length}</strong></div><div><span>Ordens entregues</span><strong>{orders.filter((order) => order.status === "Entregue").length}</strong></div></div></article></section></>;
+  const deliveredCount = orders.filter((order) => order.status === "Entregue").length;
+
+  return <>
+    <PageHeader
+      eyebrow="ANÁLISE"
+      title="Relatórios"
+      text="Filtre um período e exporte os resultados calculados a partir dos registros do sistema."
+      action={<div className="report-actions">
+        <button className="secondary-action" type="button" onClick={onPrint}><Icon name="print" size={18} /> Exportar PDF</button>
+        <button className="dashboard-primary-action" type="button" onClick={onExport}><Icon name="download" size={18} /> Exportar CSV</button>
+      </div>}
+    />
+    <section className="dashboard-panel report-filters" aria-label="Filtros do relatório">
+      <label><span>Data inicial</span><input type="date" value={start} max={end || undefined} onChange={(event) => onStart(event.target.value)} /></label>
+      <label><span>Data final</span><input type="date" value={end} min={start || undefined} onChange={(event) => onEnd(event.target.value)} /></label>
+      <button type="button" className="text-action" onClick={() => { onStart(""); onEnd(""); }} disabled={!start && !end}>Limpar período</button>
+      <strong>{orders.length} ordem(ns) no período</strong>
+    </section>
+    <section className="report-kpis">
+      <article><span>Faturamento concluído</span><strong>{money(revenue)}</strong><small>Ordens entregues no período</small></article>
+      <article><span>Valores previstos</span><strong>{money(projectedRevenue)}</strong><small>Todas as ordens do período</small></article>
+      <article><span>Serviços concluídos</span><strong>{deliveredCount}</strong><small>Ordens entregues</small></article>
+      <article><span>Estoque baixo</span><strong>{lowStock.length}</strong><small>Produtos no mínimo ou abaixo</small></article>
+    </section>
+    <section className="dashboard-grid dashboard-grid--summary">
+      <article className="dashboard-panel">
+        <div className="dashboard-panel-head"><div><span>ORDENS</span><h2>Distribuição por status</h2></div></div>
+        {orders.length === 0 ? <EmptyState icon="chart" title="Sem dados no período" text="Altere as datas ou cadastre novas ordens de serviço." /> : <div className="report-bars">{ORDER_STATUSES.map((status) => {
+          const count = orders.filter((order) => order.status === status).length;
+          return <div key={status}><div><span>{status}</span><strong>{count}</strong></div><div className="report-bar-track"><span style={{ width: `${(count / maxCount) * 100}%` }} /></div></div>;
+        })}</div>}
+      </article>
+      <article className="dashboard-panel">
+        <div className="dashboard-panel-head"><div><span>ESTOQUE</span><h2>Produtos para reposição</h2></div><strong className="report-stock-value">{money(stockValue)}</strong></div>
+        {lowStock.length === 0 ? <EmptyState icon="box" title="Estoque em dia" text="Nenhum produto atingiu a quantidade mínima." /> : <div className="report-low-stock">{lowStock.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.sku || "Sem SKU"}</small></span><b>{item.quantity} / mín. {item.minimum}</b></div>)}</div>}
+        <p className="report-context">{stock.length} produto(s) · {clientsCount} cliente(s) · valor atual do estoque {money(stockValue)}</p>
+      </article>
+    </section>
+  </>;
 }
 
 function NotificationsView({ lowStock, readyOrders, waitingPieceOrders, clients, onView }: { lowStock: StockItem[]; readyOrders: ServiceOrder[]; waitingPieceOrders: ServiceOrder[]; clients: Map<string, Client>; onView: (view: View) => void }) {
@@ -595,7 +711,7 @@ function OrderForm({ clients, stock, order, onSubmit }: { clients: Client[]; sto
       <fieldset><legend>Atendimento</legend>
         <label><span>Cliente *</span><select name="clientId" defaultValue={order?.clientId ?? ""} required autoFocus><option value="">Selecione um cliente</option>{clients.map((client) => <option value={client.id} key={client.id}>{client.name}</option>)}</select></label>
         <div className="system-form-grid"><label><span>Aparelho *</span><input name="device" defaultValue={order?.device} required maxLength={80} placeholder="Ex.: iPhone 13" /></label><label><span>Técnico responsável *</span><input name="technician" defaultValue={order?.technician} required maxLength={80} placeholder="Nome do técnico" /></label></div>
-        <label><span>Serviço ou defeito informado *</span><textarea name="service" defaultValue={order?.service} required maxLength={300} rows={3} /></label>
+        <label><span>Defeito ou serviço solicitado *</span><textarea name="service" defaultValue={order?.service} required maxLength={300} rows={3} placeholder="Descreva o defeito relatado e o serviço solicitado" /></label>
         <div className="system-form-grid"><label><span>Status *</span><select name="status" defaultValue={order?.status ?? "Em análise"}>{ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></label><label><span>Prazo de entrega *</span><input name="dueDate" type="date" defaultValue={order?.dueDate} required /></label></div>
       </fieldset>
 

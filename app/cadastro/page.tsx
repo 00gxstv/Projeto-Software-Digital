@@ -33,11 +33,8 @@ export default async function CadastroPage({ searchParams }: CadastroPageProps) 
           <img className="brand-logo" src="/digital-mais-logo.png" alt="Digital Mais Acessórios" />
         </Link>
         <div className="auth-brand-copy">
-          <span>PRIMEIRO ACESSO</span>
-          <h1>Crie seu acesso.</h1>
-          <p>
-            Faça um cadastro rápido. Ao concluir, você será levado ao login para entrar no sistema.
-          </p>
+          <h1>Vamos criar seu acesso.</h1>
+          <p>É rápido: depois do cadastro, você já poderá entrar no sistema.</p>
         </div>
         <Link className="auth-back-link" href="/">← Voltar ao site institucional</Link>
       </section>
@@ -45,7 +42,7 @@ export default async function CadastroPage({ searchParams }: CadastroPageProps) 
       <section className="auth-form-panel">
         <div className="auth-card">
           <h2>Criar conta</h2>
-          <p>Use dados válidos para cadastrar seu acesso à demonstração.</p>
+          <p>Use dados válidos para cadastrar seu acesso ao sistema.</p>
 
           {errorMessage && (
             <p className="auth-feedback auth-feedback--error" role="alert">{errorMessage}</p>

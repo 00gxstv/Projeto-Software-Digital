@@ -4,41 +4,37 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 const navItems = [
-  ["Home", "#inicio"],
-  ["O projeto", "#projeto"],
-  ["Funcionalidades", "#funcionalidades"],
-  ["Como funciona", "#como-funciona"],
-  ["Quem somos", "#quem-somos"],
+  ["Início", "#inicio"],
+  ["Sobre", "#projeto"],
+  ["O sistema", "#funcionalidades"],
+  ["Etapas", "#como-funciona"],
+  ["Equipe", "#quem-somos"],
 ];
 
 const features = [
   {
-    short: "CL",
     title: "Cadastro de clientes",
-    text: "Dados de contato e histórico ficam organizados para os próximos atendimentos.",
+    text: "Contato, aparelhos e histórico de serviços em um só lugar.",
   },
   {
-    short: "OS",
     title: "Ordens de serviço",
-    text: "Aparelho, defeito, valor, assinatura e andamento reunidos em um único registro.",
+    text: "Defeito, peças, prazo, valor e andamento registrados na mesma ordem.",
   },
   {
-    short: "ET",
     title: "Controle de estoque",
-    text: "Acompanhamento de peças, quantidade mínima e alertas para reposição.",
+    text: "Baixa automática de peças e aviso quando um item está acabando.",
   },
   {
-    short: "CP",
-    title: "Comprovantes",
-    text: "Geração de uma via digital ou impressa com as informações do serviço.",
+    title: "Relatórios",
+    text: "Resumo de faturamento, serviços concluídos e estoque baixo.",
   },
 ];
 
 const steps = [
-  ["01", "Cadastrar o cliente", "A equipe localiza um cadastro existente ou registra um novo cliente."],
-  ["02", "Abrir a ordem", "O aparelho, o defeito informado e o orçamento são adicionados à OS."],
-  ["03", "Atualizar o serviço", "O status e as peças utilizadas são atualizados durante o atendimento."],
-  ["04", "Finalizar e entregar", "O comprovante é gerado e o histórico fica salvo para futuras consultas."],
+  ["1", "Cliente chega à loja", "A equipe encontra o cadastro ou registra os dados em poucos campos."],
+  ["2", "A ordem é aberta", "Aparelho, problema, orçamento e previsão de entrega ficam documentados."],
+  ["3", "O reparo é acompanhado", "Cada mudança de status e peça usada atualiza o sistema."],
+  ["4", "Serviço finalizado", "A entrega é registrada e o histórico continua disponível."],
 ];
 
 const team = [
@@ -206,10 +202,7 @@ export default function Home() {
 
   useEffect(() => {
     const savedTheme = localStorage.getItem("digital-mais-theme") as Theme | null;
-    const preferredTheme: Theme = window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
-    const initialTheme = savedTheme === "dark" || savedTheme === "light" ? savedTheme : preferredTheme;
+    const initialTheme: Theme = savedTheme === "dark" ? "dark" : "light";
 
     const frame = window.requestAnimationFrame(() => {
       setTheme(initialTheme);
@@ -229,7 +222,7 @@ export default function Home() {
   const closeMenu = () => setMenuOpen(false);
 
   return (
-    <main>
+    <main className="institutional-page">
       <a className="skip-link" href="#conteudo">Pular para o conteúdo</a>
 
       <header className="site-header">
@@ -277,88 +270,76 @@ export default function Home() {
       </header>
 
       <div id="conteudo">
-        <section className="hero" id="inicio">
-          <div className="container hero-grid">
-            <div className="hero-copy">
-              <span className="eyebrow">PROJETO DE TCC · 2026</span>
-              <h1>Gestão simples para uma assistência mais organizada.</h1>
-              <p>
-                A Digital+ transforma fichas de papel em um sistema único para clientes,
-                ordens de serviço, estoque e comprovantes.
+        <section className="home-hero" id="inicio">
+          <div className="container home-hero-grid">
+            <div className="home-hero-copy">
+              <p className="section-label">Projeto de TCC · 2026</p>
+              <h1>Organização para quem conserta, vende e atende todos os dias.</h1>
+              <p className="home-hero-text">
+                O Digital+ reúne clientes, ordens de serviço, peças e relatórios em uma
+                ferramenta pensada para a rotina de uma assistência técnica.
               </p>
               <div className="hero-actions">
                 <Link className="button button-primary" href="/login">Ir ao sistema</Link>
-                <a className="button button-secondary" href="#projeto">Conheça o projeto</a>
+                <a className="text-link" href="#projeto">Entender o projeto <span aria-hidden="true">↓</span></a>
               </div>
             </div>
 
-            <div className="system-card" aria-label="Resumo das áreas do sistema">
-              <div className="system-card-header">
-                <div>
-                  <small>PAINEL DIGITAL+</small>
-                  <strong>Visão geral</strong>
-                </div>
-                <span>Online</span>
-              </div>
-              <div className="system-stats">
-                <article><span>Ordens abertas</span><strong>24</strong></article>
-                <article><span>Em andamento</span><strong>8</strong></article>
-              </div>
-              <div className="system-list">
-                <div><i className="dot dot-pink" /><span>Clientes cadastrados</span><b>128</b></div>
-                <div><i className="dot dot-blue" /><span>Peças em estoque</span><b>346</b></div>
-                <div><i className="dot dot-green" /><span>Serviços concluídos</span><b>92</b></div>
+            <figure className="home-hero-photo">
+              <img
+                src="/assistencia-tecnica.webp"
+                alt="Técnico realizando o reparo de um celular em uma bancada"
+                width={1440}
+                height={960}
+                fetchPriority="high"
+              />
+              <figcaption>Atendimento e manutenção organizados do início ao fim.</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section className="story-section" id="projeto">
+          <div className="container story-grid">
+            <figure className="story-photo">
+              <img
+                src="/atendimento-loja.webp"
+                alt="Atendente auxiliando um cliente em uma loja de acessórios"
+                width={1200}
+                height={900}
+                loading="lazy"
+              />
+            </figure>
+
+            <div className="story-copy">
+              <p className="section-label">Por que criamos</p>
+              <h2>A ideia veio de uma rotina que ainda depende muito do papel.</h2>
+              <p>
+                Fichas soltas, buscas demoradas e peças sem controle tornam um atendimento
+                simples mais trabalhoso. Nosso projeto nasceu para colocar essas informações
+                em ordem sem mudar completamente o jeito de trabalhar da loja.
+              </p>
+              <div className="story-notes">
+                <p><strong>Antes:</strong> anotações espalhadas e histórico difícil de encontrar.</p>
+                <p><strong>Com o sistema:</strong> cada serviço fica ligado ao cliente e ao estoque.</p>
               </div>
             </div>
           </div>
         </section>
 
-        <section className="section" id="projeto">
+        <section className="compact-section compact-section-soft" id="funcionalidades">
           <div className="container">
-            <div className="section-heading">
-              <span className="eyebrow">O PROJETO</span>
-              <h2>Menos papel. Mais controle.</h2>
-              <p>Uma proposta criada para resolver problemas reais da rotina de uma assistência técnica.</p>
+            <div className="compact-heading">
+              <div>
+                <p className="section-label">O sistema</p>
+                <h2>O que já funciona</h2>
+              </div>
+              <p>As áreas conversam entre si para evitar cadastro repetido e informação perdida.</p>
             </div>
 
-            <div className="project-grid">
-              <article className="info-card">
-                <span className="card-number">01</span>
-                <h3>O problema</h3>
-                <p>Fichas físicas podem se perder, dificultam a busca do histórico e deixam o controle de peças pouco confiável.</p>
-                <ul>
-                  <li>Informações espalhadas</li>
-                  <li>Atendimento mais lento</li>
-                  <li>Dificuldade para acompanhar serviços</li>
-                </ul>
-              </article>
-
-              <article className="info-card info-card-accent">
-                <span className="card-number">02</span>
-                <h3>A solução</h3>
-                <p>Centralizar as informações em uma plataforma simples, acessível e adequada ao dia a dia da loja.</p>
-                <ul>
-                  <li>Histórico fácil de consultar</li>
-                  <li>Fluxo de atendimento organizado</li>
-                  <li>Estoque conectado às ordens</li>
-                </ul>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section className="section section-soft" id="funcionalidades">
-          <div className="container">
-            <div className="section-heading">
-              <span className="eyebrow">FUNCIONALIDADES</span>
-              <h2>O essencial para a rotina da loja.</h2>
-              <p>Quatro áreas integradas, sem complicar o trabalho de quem usa o sistema.</p>
-            </div>
-
-            <div className="feature-grid">
-              {features.map((feature) => (
-                <article className="feature-card" key={feature.title}>
-                  <span className="feature-icon">{feature.short}</span>
+            <div className="human-feature-grid">
+              {features.map((feature, index) => (
+                <article className="human-feature" key={feature.title}>
+                  <span aria-hidden="true">0{index + 1}</span>
                   <h3>{feature.title}</h3>
                   <p>{feature.text}</p>
                 </article>
@@ -367,50 +348,57 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="section" id="como-funciona">
-          <div className="container">
-            <div className="section-heading">
-              <span className="eyebrow">COMO FUNCIONA</span>
-              <h2>Do atendimento à entrega.</h2>
-              <p>Um fluxo curto e fácil de acompanhar em cada serviço.</p>
+        <section className="process-section" id="como-funciona">
+          <div className="container process-grid">
+            <div className="process-copy">
+              <p className="section-label">Na prática</p>
+              <h2>Um serviço completo em quatro etapas.</h2>
+              <div className="human-steps">
+                {steps.map(([number, title, text]) => (
+                  <article key={number}>
+                    <span>{number}</span>
+                    <div>
+                      <h3>{title}</h3>
+                      <p>{text}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
 
-            <div className="steps-grid">
-              {steps.map(([number, title, text]) => (
-                <article className="step-card" key={number}>
-                  <span>{number}</span>
-                  <h3>{title}</h3>
-                  <p>{text}</p>
-                </article>
-              ))}
-            </div>
+            <figure className="process-photo">
+              <img
+                src="/estoque-pecas.webp"
+                alt="Profissional conferindo peças organizadas no estoque"
+                width={1200}
+                height={900}
+                loading="lazy"
+              />
+              <figcaption>Peças usadas na ordem são descontadas do estoque automaticamente.</figcaption>
+            </figure>
           </div>
         </section>
 
-        <section className="section about-section" id="quem-somos">
-          <div className="container about-grid">
-            <div className="about-copy">
-              <span className="eyebrow eyebrow-light">QUEM SOMOS</span>
-              <h2>Uma equipe unida por um problema real.</h2>
+        <section className="team-section" id="quem-somos">
+          <div className="container team-layout">
+            <div className="team-intro">
+              <p className="section-label">Quem somos</p>
+              <h2>Quatro estudantes, uma ideia construída em grupo.</h2>
               <p>
-                Somos estudantes desenvolvendo uma solução acadêmica para modernizar o
-                atendimento da Digital+ Acessórios. Nosso objetivo é tornar a gestão da loja
-                mais simples, segura e eficiente.
-              </p>
-              <p>
-                O projeto combina pesquisa, organização de processos e desenvolvimento web
-                em uma proposta que pode evoluir do protótipo para a rotina real.
+                O Digital+ é nosso projeto de conclusão de curso. Cada etapa foi pensada a
+                partir de situações comuns no atendimento, no reparo e no controle da loja.
               </p>
             </div>
 
-            <div className="team-grid" aria-label="Integrantes do projeto">
-              {team.map(([initials, name]) => (
-                <article className="team-card" key={name}>
-                  <span>{initials}</span>
-                  <div><strong>{name}</strong><small>Equipe do TCC</small></div>
-                </article>
+            <ul className="human-team-list" aria-label="Integrantes do projeto">
+              {team.map(([, name], index) => (
+                <li key={name}>
+                  <span>0{index + 1}</span>
+                  <strong>{name}</strong>
+                  <small>Desenvolvimento e pesquisa</small>
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
         </section>
       </div>

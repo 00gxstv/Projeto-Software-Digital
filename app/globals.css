@@ -3404,6 +3404,11 @@ select.order-status {
   filter: invert(1) hue-rotate(180deg);
 }
 
+/* Blend the original black image background into the ERP dark header. */
+:root[data-theme="dark"] .dashboard-brand img {
+  mix-blend-mode: lighten;
+}
+
 .dashboard-brand span,
 .dashboard-operation-context,
 .dashboard-page-name {

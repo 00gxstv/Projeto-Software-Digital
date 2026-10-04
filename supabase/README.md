@@ -17,9 +17,9 @@ Destino: https://projeto-tcc-institucional.vercel.app
 9. Confira os avisos do Security Advisor antes de usar dados reais.
 
 ## Vercel
-Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY com os valores do Connect do digital-mais nos ambientes de destino. Nenhuma chave secreta/service_role é necessária. Faça novo deploy após configurar as variáveis.
+As variáveis públicas do digital-mais estão em .env.production. A chave publishable pode ser distribuída com o site; o acesso é limitado pelo Supabase Auth e pelas políticas RLS. Nenhuma chave secreta/service_role é usada. Para trocar de projeto ou rotacionar a chave pública, atualize esse arquivo ou configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY na Vercel e faça novo deploy.
 
-O código está preparado em branch de integração. Só promover após aplicar o SQL e conferir o fluxo de login, liberação e cadastro no banco real.
+O SQL foi aplicado no digital-mais. O teste transacional no banco real confirmou cadastro, criação de OS, baixa e devolução de peças; os registros de teste foram revertidos com ROLLBACK. Cada integrante ainda precisa criar/confirmar sua conta e receber liberação explícita.
 
 ## Verificação local
 - npm ci

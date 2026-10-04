@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import Link from "next/link";
 
 type DashboardProps = { name: string; email: string;  };
+type Deletion = { action: "deleteClient" | "deleteStock" | "deleteOrder"; title: string; description: string; payload: { id: string; version: number; productVersion?: number } };
 type Theme = "light" | "dark";
 type View = "overview" | "orders" | "clients" | "stock" | "reports" | "notifications";
 type Modal = "client" | "stock" | "order" | "orderDetails" | null;
@@ -148,6 +149,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
   const [reportEnd, setReportEnd] = useState("");
   const [systemMessage, setSystemMessage] = useState("");
 
+  const [deletion, setDeletion] = useState<Deletion | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [data, setData] = useState<SystemData>(EMPTY_DATA);
@@ -179,7 +181,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
 
   const mutate = async (action: string, payload: unknown) => {
     if (busyRef.current) return false;
-    if (!storeRef.current || loadError) { window.alert("Atualize os dados e selecione uma loja antes de salvar."); return false; }
+    if (!storeRef.current || loadError) { setLoadError(loadError || "Atualize os dados e selecione uma loja antes de salvar."); return false; }
     busyRef.current = true;
     setBusy(true);
     ++requestRef.current;
@@ -190,7 +192,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
       if (!response.ok) throw new Error(result.error || "Não foi possível salvar.");
       saved = true;
       await reloadData();
-      setSystemMessage("Alterações salvas no banco da equipe.");
+      setSystemMessage(action === "deleteClient" ? "Cliente excluído." : action === "deleteStock" ? "Produto retirado do estoque desta unidade." : action === "deleteOrder" ? "Ordem de serviço excluída." : "Alterações salvas no banco da equipe.");
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha de conexão.";
@@ -198,7 +200,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
         setLoadError("A alteração foi salva, mas a atualização da tela falhou. Clique em atualizar; não repita o cadastro.");
         return true;
       }
-      window.alert(message);
+      if (!action.startsWith("delete")) window.alert(message);
       // Não repete escritas: uma falha de rede pode ocorrer depois do commit.
       setLoadError("Atualize os dados antes de continuar. " + message);
       return false;
@@ -351,14 +353,22 @@ export default function Dashboard({ name, email }: DashboardProps) {
     if (await mutate("saveOrder", record)) { closeModal(); setActiveView("orders"); }
   };
 
-  const deleteClient = async (client: Client) => {
-    if (window.confirm("Excluir o cliente " + client.name + "?")) await mutate("deleteClient", { id: client.id, version: client.version });
+  const deleteClient = (client: Client) => {
+    if (busyRef.current) return;
+    setDeletion({ action: "deleteClient", title: "Excluir cliente?", description: `Excluir ${client.name}? Clientes com registros vinculados não podem ser excluídos.`, payload: { id: client.id, version: client.version } });
   };
-  const deleteStock = async (item: StockItem) => {
-    if (window.confirm("Retirar " + item.name + " desta loja? O saldo precisa estar zerado.")) await mutate("deleteStock", { id: item.id, version: item.version, productVersion: item.productVersion });
+  const deleteStock = (item: StockItem) => {
+    if (busyRef.current) return;
+    const storeName = stores.find((store) => store.id === storeRef.current)?.name ?? "esta unidade";
+    setDeletion({ action: "deleteStock", title: "Retirar produto do estoque?", description: `Retirar ${item.name} de ${storeName}? O saldo precisa estar zerado e o produto não pode estar vinculado a uma ordem desta unidade.`, payload: { id: item.id, version: item.version, productVersion: item.productVersion } });
   };
-  const deleteOrder = async (order: ServiceOrder) => {
-    if (window.confirm("Excluir a ordem " + order.id + "? As peças serão devolvidas ao estoque.")) await mutate("deleteOrder", { id: order.id, version: order.version });
+  const deleteOrder = (order: ServiceOrder) => {
+    if (busyRef.current) return;
+    setDeletion({ action: "deleteOrder", title: "Excluir ordem de serviço?", description: `Excluir ${order.id}? As peças utilizadas serão devolvidas ao estoque.`, payload: { id: order.id, version: order.version } });
+  };
+  const confirmDeletion = async () => {
+    if (!deletion || busyRef.current) return;
+    if (await mutate(deletion.action, deletion.payload)) setDeletion(null);
   };
   const changeQuantity = async (id: string, amount: number) => { await mutate("quantity", { id, amount }); };
   const changeOrderStatus = async (id: string, status: OrderStatus) => {
@@ -481,6 +491,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
         </div>
       </section>
 
+      {deletion && <DeleteConfirmation deletion={deletion} busy={busy} error={loadError} onCancel={() => { if (!busyRef.current) setDeletion(null); }} onConfirm={confirmDeletion} />}
       {modal && <div className="system-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}>
         <section className={`system-modal ${modal === "order" || modal === "orderDetails" ? "system-modal--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
           <button className="system-modal-close" type="button" onClick={closeModal} aria-label="Fechar"><Icon name="close" /></button>
@@ -494,6 +505,24 @@ export default function Dashboard({ name, email }: DashboardProps) {
       </div>}
     </main>
   );
+}
+
+function DeleteConfirmation({ deletion, busy, error, onCancel, onConfirm }: { deletion: Deletion; busy: boolean; error: string; onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => { if (dialog?.open) dialog.close(); };
+  }, []);
+  return <dialog ref={dialogRef} aria-labelledby="delete-title" aria-describedby="delete-description" onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }} style={{ margin: "auto", width: "min(480px, calc(100% - 32px))", padding: 28, borderRadius: 18, border: "1px solid var(--dashboard-line)", background: "var(--dashboard-panel)", color: "var(--dashboard-text)", boxShadow: "0 24px 80px #0006" }}>
+    <h2 id="delete-title" style={{ fontSize: 20, margin: "0 0 12px" }}>{deletion.title}</h2>
+    <p id="delete-description" style={{ lineHeight: 1.6, color: "var(--dashboard-muted)", marginBottom: 20 }}>{deletion.description}</p>
+    {error && <p role="alert" style={{ color: "var(--dashboard-text)", lineHeight: 1.5, marginBottom: 20 }}>{error} Feche esta janela e atualize os dados para tentar novamente.</p>}
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+      <button type="button" className="secondary-action" autoFocus disabled={busy} onClick={onCancel}>{error ? "Fechar" : "Cancelar"}</button>
+      <button type="button" className="dashboard-primary-action" style={{ background: "#b42332", color: "#fff" }} disabled={busy || Boolean(error)} onClick={onConfirm}>{busy ? "Excluindo…" : "Confirmar exclusão"}</button>
+    </div>
+  </dialog>;
 }
 
 function PageHeader({ eyebrow, title, text, action }: { eyebrow: string; title: string; text: string; action?: React.ReactNode }) {

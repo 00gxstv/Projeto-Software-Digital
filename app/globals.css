@@ -2944,6 +2944,26 @@ select.order-status {
   background: var(--page);
 }
 
+/* Preto neutro no tema escuro da página institucional. */
+:root[data-theme="dark"]:has(.institutional-page) {
+  --page: #000000;
+  --surface: #121212;
+  --surface-soft: #000000;
+  --text: #f5f5f5;
+  --muted: #b5b5b5;
+  --line: #2c2c2c;
+  --header: rgba(0, 0, 0, 0.96);
+  --team-section-bg: #000000;
+  --team-section-text: #f5f5f5;
+  --team-section-muted: #b5b5b5;
+  --team-section-line: #2c2c2c;
+  --footer-bg: #000000;
+  --footer-text: #d5d5d5;
+  --footer-muted: #a0a0a0;
+  --footer-link: #d0d0d0;
+  --footer-line: #2c2c2c;
+}
+
 .institutional-page .section-label {
   margin: 0 0 14px;
   color: var(--pink);

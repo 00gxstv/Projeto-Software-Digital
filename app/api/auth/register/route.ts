@@ -18,6 +18,7 @@ export async function POST(request: Request) {
     const client = await createClient();
     const { data, error } = await client.auth.signUp({ email, password, options: { data: { name }, emailRedirectTo: absoluteAppUrl(request, "/auth/callback").href } });
     if (error) return fail(error.status === 429 ? "limite" : "cadastro");
-    return NextResponse.redirect(absoluteAppUrl(request, data.session ? "/sistema" : "/login?cadastro=sucesso"), 303);
+    if (data.session) await client.auth.signOut();
+    return NextResponse.redirect(absoluteAppUrl(request, "/login?cadastro=sucesso"), 303);
   } catch { return fail("conexao"); }
 }

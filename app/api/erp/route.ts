@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   try {
     if (Number(request.headers.get("content-length") ?? 0) > 100000) return failure({ code: "22000" });
     const body = await request.json();
-    if (!/^\d+$/.test(String(body.storeId)) || !["saveClient", "deleteClient", "saveStock", "deleteStock", "quantity", "saveOrder", "deleteOrder", "status"].includes(body.action)) return failure({ code: "22000" });
+    if (!/^\d+$/.test(String(body.storeId)) || !["saveClient", "deleteClient", "saveStock", "deleteStock", "quantity", "saveOrder", "deleteOrder", "status", "event"].includes(body.action)) return failure({ code: "22000" });
     const client = await createClient();
     const { data: { user } } = await client.auth.getUser();
     if (!user) return NextResponse.json({ error: "Sessão encerrada. Faça login novamente." }, { status: 401, headers });

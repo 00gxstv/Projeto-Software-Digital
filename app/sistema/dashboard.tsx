@@ -6,7 +6,7 @@ import Link from "next/link";
 type DashboardProps = { name: string; email: string;  };
 type Deletion = { action: "deleteClient" | "deleteStock" | "deleteOrder"; title: string; description: string; payload: { id: string; version: number; productVersion?: number } };
 type Theme = "light" | "dark";
-type View = "overview" | "orders" | "clients" | "stock" | "reports" | "notifications";
+type View = "loyalty" | "team" | "overview" | "orders" | "clients" | "stock" | "reports" | "notifications";
 type Modal = "client" | "stock" | "order" | "orderDetails" | null;
 type OrderStatus = "Em análise" | "Aguardando aprovação" | "Aprovado" | "Em reparo" | "Aguardando peça" | "Pronto" | "Entregue" | "Cancelado";
 type PaymentMethod = "A definir" | "Pix" | "Dinheiro" | "Cartão de crédito" | "Cartão de débito" | "Boleto";
@@ -53,6 +53,14 @@ type ServiceOrder = {
   id: string;
   clientId: string;
   device: string;
+  deviceId?: string;
+  imei?: string;
+  color?: string;
+  diagnosis?: string;
+  summary?: string;
+  stage?: string;
+  labor?: number;
+  discount?: number;
   service: string;
   status: OrderStatus;
   technician: string;
@@ -73,6 +81,16 @@ type SystemData = {
   orders: ServiceOrder[];
 };
 
+type Visit = { id: string; clientId: string; deviceId: string; device: string; service: string; createdAt: string; storeId: string; store: string; status: string; summary: string };
+type Device = { id: string; clientId: string; device: string; imei: string; color: string };
+type Movement = { id: string; stockItemId: string; name: string; quantity: number; type: string; note: string; createdAt: string; before: number | null; after: number | null };
+type TeamMember = { id: string; name: string; email: string; role: string; decision: string; active: boolean; createdAt: string };
+type Insights = { isOwner: boolean; visits: Visit[]; devices: Device[]; movements: Movement[]; consumption: Record<string, number>; customerSpend: Record<string, number>; team: TeamMember[] };
+const EMPTY_INSIGHTS: Insights = { isOwner: false, visits: [], devices: [], movements: [], consumption: {}, customerSpend: {}, team: [] };
+const STAGES = ["Recebido", "Diagnóstico iniciado", "Diagnóstico concluído", "Aguardando aprovação", "Peça solicitada", "Peça recebida", "Reparo iniciado", "Reparo concluído", "Pronto para retirada", "Entregue"];
+const todayBR = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(new Date());
+function attentionOrders(orders: ServiceOrder[]) { const limit = new Date(todayBR() + "T12:00:00Z"); limit.setUTCDate(limit.getUTCDate()+3); return orders.filter(o => !["Entregue", "Cancelado", "Pronto"].includes(o.status) && o.dueDate && o.dueDate <= limit.toISOString().slice(0,10)).sort((a,b) => a.dueDate.localeCompare(b.dueDate)); }
+
 const STORAGE_KEY = "digital-mais-system-v2";
 const EMPTY_DATA: SystemData = { clients: [], stock: [], orders: [] };
 const ORDER_STATUSES: OrderStatus[] = ["Em análise", "Aguardando aprovação", "Aprovado", "Em reparo", "Aguardando peça", "Pronto", "Entregue", "Cancelado"];
@@ -80,9 +98,11 @@ const PAYMENT_METHODS: PaymentMethod[] = ["A definir", "Pix", "Dinheiro", "Cart�
 const PAYMENT_STATUSES: PaymentStatus[] = ["Pendente", "Parcial", "Pago"];
 
 const navItems: Array<{ id: View; label: string; icon: string }> = [
-  { id: "overview", label: "Visão geral", icon: "grid" },
+  { id: "overview", label: "Central operacional", icon: "grid" },
   { id: "orders", label: "Ordens de serviço", icon: "file" },
   { id: "clients", label: "Clientes", icon: "users" },
+  { id: "loyalty", label: "Fidelidade", icon: "users" },
+  { id: "team", label: "Acessos", icon: "users" },
   { id: "stock", label: "Estoque", icon: "box" },
   { id: "reports", label: "Relatórios", icon: "chart" },
   { id: "notifications", label: "Notificações", icon: "bell" },
@@ -153,6 +173,9 @@ export default function Dashboard({ name, email }: DashboardProps) {
   const [modal, setModal] = useState<Modal>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [data, setData] = useState<SystemData>(EMPTY_DATA);
+  const [insights, setInsights] = useState<Insights>(EMPTY_INSIGHTS);
+  const [newClientId, setNewClientId] = useState("");
+  const [loyaltyClient, setLoyaltyClient] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -171,6 +194,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Não foi possível carregar os dados.");
     if (request !== requestRef.current || (modalRef.current && !busyRef.current)) return;
+    setInsights({ ...EMPTY_INSIGHTS, ...result });
     setData({ clients: result.clients, stock: result.stock, orders: result.orders });
     setStores(result.stores);
     storeRef.current = result.storeId ?? "";
@@ -265,7 +289,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
   const readyOrders = useMemo(() => data.orders.filter((order) => order.status === "Pronto"), [data.orders]);
   const waitingPieceOrders = useMemo(() => data.orders.filter((order) => order.status === "Aguardando peça"), [data.orders]);
   const deliveredOrders = useMemo(() => data.orders.filter((order) => order.status === "Entregue"), [data.orders]);
-  const notificationCount = lowStock.length + readyOrders.length + waitingPieceOrders.length;
+  const notificationCount = lowStock.length + readyOrders.length + waitingPieceOrders.length + attentionOrders(data.orders).length + (insights.isOwner ? insights.team.filter(m => m.decision === "pendente").length : 0);
   const revenue = deliveredOrders.reduce((total, order) => total + order.value, 0);
   const stockValue = data.stock.reduce((total, item) => total + item.cost * item.quantity, 0);
   const reportOrders = useMemo(() => data.orders.filter((order) => {
@@ -316,6 +340,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
     }
     if (busyRef.current || loadError || !storeRef.current) return;
     modalRef.current = type;
+    if (type === "order" && !id) setNewClientId("");
     setEditingId(id ?? null);
     setModal(type);
   };
@@ -348,7 +373,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
     });
     // Preserva peças históricas de produtos inativos que não aparecem no formulário.
     for (const part of editingOrder?.parts ?? []) if (!data.stock.some((item) => item.id === part.stockItemId)) parts.push(part);
-    const record = { id: editingOrder?.id, version: editingOrder?.version, clientId: form.get("clientId"), device: form.get("device"), service: form.get("service"), status: form.get("status"), technician: form.get("technician"), dueDate: form.get("dueDate"), paymentMethod: form.get("paymentMethod"), paymentStatus: form.get("paymentStatus"), notes: form.get("notes"), parts, value: Number(form.get("value")) };
+    const record = { deviceId: form.get("deviceId"), imei: form.get("imei"), color: form.get("color"), diagnosis: form.get("diagnosis"), summary: form.get("summary"), stage: form.get("stage"), labor: Number(form.get("labor")), discount: Number(form.get("discount")), id: editingOrder?.id, version: editingOrder?.version, clientId: form.get("clientId"), device: form.get("device"), service: form.get("service"), status: form.get("status"), technician: form.get("technician"), dueDate: form.get("dueDate"), paymentMethod: form.get("paymentMethod"), paymentStatus: form.get("paymentStatus"), notes: form.get("notes"), parts, value: Number(form.get("value")) };
     if (record.status === "Cancelado" && !window.confirm("Cancelar esta ordem? As peças serão devolvidas ao estoque.")) return;
     if (await mutate("saveOrder", record)) { closeModal(); setActiveView("orders"); }
   };
@@ -387,7 +412,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
 
     const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] ?? character);
     const partsHtml = order.parts.length === 0 ? "<tr><td colspan='3'>Nenhuma peça utilizada</td></tr>" : order.parts.map((part) => `<tr><td>${escapeHtml(part.name)}</td><td>${part.quantity}</td><td>${escapeHtml(money(part.unitPrice * part.quantity))}</td></tr>`).join("");
-    popup.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeHtml(order.id)} - Digital+</title><style>body{font:14px Arial,sans-serif;color:#171717;margin:36px}header{display:flex;justify-content:space-between;border-bottom:3px solid #e5007d;padding-bottom:18px;margin-bottom:24px}h1{margin:0;font-size:24px}h2{font-size:16px;margin:24px 0 10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px}.box{padding:12px;background:#f5f5f7;border-radius:8px}.label{display:block;color:#666;font-size:11px;text-transform:uppercase;margin-bottom:4px}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #ddd;text-align:left}th{background:#f3f3f5}.total{text-align:right;font-size:18px;font-weight:700;margin-top:20px}.notes{white-space:pre-wrap}.signature{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:70px}.signature div{border-top:1px solid #333;text-align:center;padding-top:8px}@media print{body{margin:15mm}}</style></head><body><header><div><h1>Digital+ Acessórios</h1><div>Ordem de serviço ${escapeHtml(order.id)}</div></div><div>Emitido em ${escapeHtml(new Date().toLocaleString("pt-BR"))}</div></header><div class="grid"><div class="box"><span class="label">Cliente</span>${escapeHtml(client?.name ?? "Cliente removido")}</div><div class="box"><span class="label">Contato</span>${escapeHtml(client?.phone ?? "—")}</div><div class="box"><span class="label">Aparelho</span>${escapeHtml(order.device)}</div><div class="box"><span class="label">Status</span>${escapeHtml(order.status)}</div><div class="box"><span class="label">Técnico</span>${escapeHtml(order.technician || "Não definido")}</div><div class="box"><span class="label">Prazo</span>${escapeHtml(shortDate(order.dueDate))}</div></div><h2>Serviço ou defeito informado</h2><p>${escapeHtml(order.service)}</p><h2>Peças utilizadas</h2><table><thead><tr><th>Peça</th><th>Quantidade</th><th>Subtotal</th></tr></thead><tbody>${partsHtml}</tbody></table><h2>Pagamento</h2><p>${escapeHtml(order.paymentMethod)} · ${escapeHtml(order.paymentStatus)}</p>${order.notes ? `<h2>Observações</h2><p class="notes">${escapeHtml(order.notes)}</p>` : ""}<p class="total">Valor do serviço: ${escapeHtml(money(order.value))}</p><div class="signature"><div>Responsável pela assistência</div><div>Cliente</div></div><script>window.onload=()=>window.print();<\/script></body></html>`);
+    popup.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeHtml(order.id)} - Digital+</title><style>body{font:14px Arial,sans-serif;color:#171717;margin:36px}header{display:flex;justify-content:space-between;border-bottom:3px solid #e5007d;padding-bottom:18px;margin-bottom:24px}h1{margin:0;font-size:24px}h2{font-size:16px;margin:24px 0 10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px}.box{padding:12px;background:#f5f5f7;border-radius:8px}.label{display:block;color:#666;font-size:11px;text-transform:uppercase;margin-bottom:4px}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #ddd;text-align:left}th{background:#f3f3f5}.total{text-align:right;font-size:18px;font-weight:700;margin-top:20px}.notes{white-space:pre-wrap}.signature{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:70px}.signature div{border-top:1px solid #333;text-align:center;padding-top:8px}@media print{body{margin:15mm}}</style></head><body><header><div><h1>Digital+ Acessórios</h1><div>Ordem de serviço ${escapeHtml(order.id)}</div></div><div>Emitido em ${escapeHtml(new Date().toLocaleString("pt-BR"))}</div></header><div class="grid"><div class="box"><span class="label">Cliente</span>${escapeHtml(client?.name ?? "Cliente removido")}</div><div class="box"><span class="label">Contato</span>${escapeHtml(client?.phone ?? "—")}</div><div class="box"><span class="label">Aparelho</span>${escapeHtml(order.device)}</div><div class="box"><span class="label">Status</span>${escapeHtml(order.status)}</div><div class="box"><span class="label">Técnico</span>${escapeHtml(order.technician || "Não definido")}</div><div class="box"><span class="label">Prazo</span>${escapeHtml(shortDate(order.dueDate))}</div></div><h2>Serviço ou defeito informado</h2><p>${escapeHtml(order.service)}</p><h2>Identificação do aparelho</h2><p>IMEI / série: ${escapeHtml(order.imei || "Não informado")} · Cor: ${escapeHtml(order.color || "Não informada")}</p><h2>Diagnóstico</h2><p class="notes">${escapeHtml(order.diagnosis || "Não registrado")}</p><h2>Resumo do serviço</h2><p class="notes">${escapeHtml(order.summary || "Não registrado")}</p><h2>Peças utilizadas</h2><table><thead><tr><th>Peça</th><th>Quantidade</th><th>Subtotal</th></tr></thead><tbody>${partsHtml}</tbody></table><h2>Pagamento</h2><p>${escapeHtml(order.paymentMethod)} · ${escapeHtml(order.paymentStatus)}</p>${order.notes ? `<h2>Observações</h2><p class="notes">${escapeHtml(order.notes)}</p>` : ""}<p>Mão de obra: ${escapeHtml(money(order.labor ?? 0))} · Peças: ${escapeHtml(money(order.parts.reduce((t,p)=>t+p.quantity*p.unitPrice,0)))} · Desconto: ${escapeHtml(money(order.discount ?? 0))}</p><h2>Histórico</h2>${order.history.map(e=>`<p>${escapeHtml(dateTime(e.at))} — ${escapeHtml(e.action)}</p>`).join("")}<p class="total">Total: ${escapeHtml(money(order.value))}</p><div class="signature"><div>Responsável pela assistência</div><div>Cliente</div></div><script>window.onload=()=>window.print();<\/script></body></html>`);
     popup.document.close();
   };
 
@@ -433,8 +458,8 @@ export default function Dashboard({ name, email }: DashboardProps) {
     popup.document.close();
   };
 
-  const searchPlaceholder = activeView === "clients" ? "Buscar cliente..." : activeView === "stock" ? "Buscar produto ou SKU..." : "Buscar ordem, cliente ou aparelho...";
-  const viewUsesSearch = activeView === "orders" || activeView === "clients" || activeView === "stock";
+  const searchPlaceholder = (activeView === "clients" || activeView === "loyalty") ? "Buscar cliente..." : activeView === "stock" ? "Buscar produto ou SKU..." : "Buscar ordem, cliente ou aparelho...";
+  const viewUsesSearch = activeView === "orders" || activeView === "clients" || activeView === "loyalty" || activeView === "stock";
 
   return (
     <main className="dashboard-shell" aria-busy={busy}>
@@ -452,7 +477,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
             <button className="dashboard-icon-button" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "Ativar tema claro" : "Ativar tema escuro"}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>
             <button className={`dashboard-icon-button dashboard-notification ${activeView === "notifications" ? "dashboard-icon-button--active" : ""}`} type="button" onClick={() => changeView("notifications")} aria-label={`Abrir notificações: ${notificationCount} alerta(s)`}><Icon name="bell" />{notificationCount > 0 && <span>{notificationCount}</span>}</button>
             <details className="dashboard-account">
-              <summary aria-label="Abrir opções da conta"><span className="profile-avatar">{initials || "DM"}</span><span><strong>{firstName}</strong><small>Equipe</small></span></summary>
+              <summary aria-label="Abrir opções da conta"><span className="profile-avatar">{initials || "DM"}</span><span><strong>{firstName}</strong><small>{insights.isOwner ? "Dona do sistema" : "Equipe"}</small></span></summary>
               <div className="dashboard-account-menu">
                 <div><strong>{name}</strong><small>{email}</small></div>
                 <Link href="/"><Icon name="home" size={17} /> Site institucional</Link>
@@ -463,7 +488,7 @@ export default function Dashboard({ name, email }: DashboardProps) {
         </div>
         <div className="dashboard-navigation-row">
           <nav className="dashboard-nav" aria-label="Módulos do sistema">
-            {navItems.map((item) => (
+            {navItems.filter(item => item.id !== "team" || insights.isOwner).map((item) => (
               <button className={`dashboard-nav-link ${activeView === item.id ? "dashboard-nav-link--active" : ""}`} type="button" key={item.id} onClick={() => changeView(item.id)} aria-current={activeView === item.id ? "page" : undefined}>
                 <Icon name={item.icon} size={18} /><span>{item.label}</span>
               </button>
@@ -481,12 +506,14 @@ export default function Dashboard({ name, email }: DashboardProps) {
           {hydrated && stores.length === 0 && <div className="system-feedback" role="alert">Cadastre as unidades na tabela lojas do Supabase, com nome, endereço e ativo marcado, para iniciar os atendimentos.</div>}
           {systemMessage && <div className="system-feedback" role="status"><Icon name="bell" size={18} /><span>{systemMessage}</span><button type="button" onClick={() => setSystemMessage("")} aria-label="Fechar mensagem"><Icon name="close" size={16} /></button></div>}
           {!hydrated ? <div className="module-loading">{loadError ? "Aguardando conexão com o banco." : "Carregando seus dados..."}</div> : <>
-            {activeView === "overview" && <Overview name={firstName} clients={data.clients} stock={data.stock} orders={data.orders} clientById={clientById} lowStock={lowStock} openOrders={openOrders} revenue={revenue} onNewOrder={() => openModal("order")} onView={changeView} onStatusView={openOrdersByStatus} />}
+            {activeView === "overview" && <Overview onDetails={(id) => openModal("orderDetails", id)} name={firstName} clients={data.clients} stock={data.stock} orders={data.orders} clientById={clientById} lowStock={lowStock} openOrders={openOrders} revenue={revenue} onNewOrder={() => openModal("order")} onView={changeView} onStatusView={openOrdersByStatus} />}
             {activeView === "orders" && <OrdersView orders={filteredOrders} clients={clientById} statusFilter={statusFilter} onStatusFilter={setStatusFilter} onNew={() => openModal("order")} onDetails={(id) => openModal("orderDetails", id)} onEdit={(id) => openModal("order", id)} onPrint={printOrder} onDelete={deleteOrder} onStatus={changeOrderStatus} />}
-            {activeView === "clients" && <ClientsView clients={filteredClients} onNew={() => openModal("client")} onEdit={(id) => openModal("client", id)} onDelete={deleteClient} />}
-            {activeView === "stock" && <StockView stock={filteredStock} onNew={() => openModal("stock")} onEdit={(id) => openModal("stock", id)} onDelete={deleteStock} onQuantity={changeQuantity} />}
+            {activeView === "clients" && <ClientsView onHistory={(id) => { setLoyaltyClient(id); changeView("loyalty"); }} clients={filteredClients} onNew={() => openModal("client")} onEdit={(id) => openModal("client", id)} onDelete={deleteClient} />}
+            {activeView === "loyalty" && <LoyaltyView clients={filteredClients} insights={insights} selected={loyaltyClient} onSelect={setLoyaltyClient} onNew={(id) => { openModal("order"); setNewClientId(id); }} onVisit={async (visit) => { if (visit.storeId !== storeId) await switchStore(visit.storeId); openModal("orderDetails", visit.id); }} />}
+            {activeView === "team" && insights.isOwner && <TeamView members={insights.team} onRefresh={reloadData} />}
+            {activeView === "stock" && <StockView insights={insights} stock={filteredStock} onNew={() => openModal("stock")} onEdit={(id) => openModal("stock", id)} onDelete={deleteStock} onQuantity={changeQuantity} />}
             {activeView === "reports" && <ReportsView orders={reportOrders} stock={data.stock} lowStock={lowStock} clientsCount={data.clients.length} revenue={reportRevenue} projectedRevenue={reportProjectedRevenue} stockValue={stockValue} start={reportStart} end={reportEnd} onStart={setReportStart} onEnd={setReportEnd} onExport={exportReports} onPrint={printReports} />}
-            {activeView === "notifications" && <NotificationsView lowStock={lowStock} readyOrders={readyOrders} waitingPieceOrders={waitingPieceOrders} clients={clientById} onView={changeView} />}
+            {activeView === "notifications" && <NotificationsView attention={attentionOrders(data.orders)} pendingCount={insights.isOwner ? insights.team.filter(m => m.decision === "pendente").length : 0} onDetails={id=>openModal("orderDetails",id)} lowStock={lowStock} readyOrders={readyOrders} waitingPieceOrders={waitingPieceOrders} clients={clientById} onView={changeView} />}
           </>}
         </div>
       </section>
@@ -498,8 +525,8 @@ export default function Dashboard({ name, email }: DashboardProps) {
           <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           {modal === "client" && <ClientForm client={editingClient} onSubmit={saveClient} />}
           {modal === "stock" && <StockForm item={editingStock} onSubmit={saveStock} />}
-          {modal === "order" && <OrderForm clients={data.clients} stock={data.stock} order={editingOrder} onSubmit={saveOrder} />}
-          {modal === "orderDetails" && editingOrder && <OrderDetails order={editingOrder} client={clientById.get(editingOrder.clientId)} onEdit={() => openModal("order", editingOrder.id)} onPrint={() => printOrder(editingOrder)} />}
+          {modal === "order" && <OrderForm clients={data.clients} stock={data.stock} order={editingOrder} onSubmit={saveOrder} devices={insights.devices} initialClientId={newClientId} />}
+          {modal === "orderDetails" && editingOrder && <OrderDetails onEvent={async (event) => { if (editingOrder) return await mutate("event", { id: editingOrder.id, version: editingOrder.version, event }); return false; }} order={editingOrder} client={clientById.get(editingOrder.clientId)} onEdit={() => openModal("order", editingOrder.id)} onPrint={() => printOrder(editingOrder)} />}
           </fieldset>
         </section>
       </div>}
@@ -540,10 +567,10 @@ function EmptyState({ icon, title, text, action }: { icon: string; title: string
   return <div className="module-empty"><span><Icon name={icon} size={26} /></span><h3>{title}</h3><p>{text}</p>{action}</div>;
 }
 
-function Overview({ name, clients, stock, orders, clientById, lowStock, openOrders, revenue, onNewOrder, onView, onStatusView }: { name: string; clients: Client[]; stock: StockItem[]; orders: ServiceOrder[]; clientById: Map<string, Client>; lowStock: StockItem[]; openOrders: ServiceOrder[]; revenue: number; onNewOrder: () => void; onView: (view: View) => void; onStatusView: (status: OrderStatus) => void }) {
+function Overview({ onDetails, name, clients, stock, orders, clientById, lowStock, openOrders, revenue, onNewOrder, onView, onStatusView }: { onDetails: (id: string) => void; name: string; clients: Client[]; stock: StockItem[]; orders: ServiceOrder[]; clientById: Map<string, Client>; lowStock: StockItem[]; openOrders: ServiceOrder[]; revenue: number; onNewOrder: () => void; onView: (view: View) => void; onStatusView: (status: OrderStatus) => void }) {
   const ready = orders.filter((order) => order.status === "Pronto").length;
   return <>
-    <PageHeader eyebrow="Hoje na assistência" title={`Olá, ${name}.`} text="Veja o que precisa de atenção e continue os atendimentos de onde parou." action={<button className="dashboard-primary-action" type="button" onClick={onNewOrder}><Icon name="plus" size={18} /> Nova ordem de serviço</button>} />
+    <PageHeader eyebrow="Hoje na assistência" title={`Hoje na assistência, ${name}.`} text="Veja o que precisa de atenção e continue os atendimentos de onde parou." action={<button className="dashboard-primary-action" type="button" onClick={onNewOrder}><Icon name="plus" size={18} /> Nova ordem de serviço</button>} />
     <section className="service-flow" aria-label="Fluxo das ordens de serviço">
       <div className="service-flow__intro"><span>Fluxo da oficina</span><strong>Acompanhe cada etapa</strong><small>Clique em uma etapa para abrir as ordens correspondentes.</small></div>
       <div className="service-flow__steps">
@@ -553,12 +580,10 @@ function Overview({ name, clients, stock, orders, clientById, lowStock, openOrde
         })}
       </div>
     </section>
-    <section className="dashboard-kpis" aria-label="Resumo do negócio">
-      <article className="dashboard-kpi"><div><span>Ordens abertas</span><strong>{openOrders.length}</strong><small>{orders.length} ordens cadastradas</small></div><span className="kpi-mark kpi-mark--pink">OS</span></article>
-      <article className="dashboard-kpi"><div><span>Clientes</span><strong>{clients.length}</strong><small>cadastros ativos</small></div><span className="kpi-mark kpi-mark--blue">CL</span></article>
-      <article className="dashboard-kpi"><div><span>Prontas para retirada</span><strong>{ready}</strong><small>aguardando o cliente</small></div><span className="kpi-mark kpi-mark--green">PR</span></article>
-      <article className="dashboard-kpi"><div><span>Faturamento concluído</span><strong>{money(revenue)}</strong><small>ordens marcadas como entregues</small></div><span className="kpi-mark kpi-mark--dark">R$</span></article>
+    <section className="dashboard-kpis" aria-label="Operação atual">
+      {[{label:"Atendimentos em andamento",count:openOrders.length,status:null},{label:"Aguardando peça",count:orders.filter(o=>o.status==="Aguardando peça").length,status:"Aguardando peça"},{label:"Prontos para retirada",count:ready,status:"Pronto"},{label:"Aguardando aprovação",count:orders.filter(o=>o.status==="Aguardando aprovação").length,status:"Aguardando aprovação"}].map(k=><button type="button" className="dashboard-kpi operational-kpi" key={k.label} onClick={()=>k.status ? onStatusView(k.status as OrderStatus) : onView("orders")}><div><span>{k.label}</span><strong>{k.count}</strong><small>Posição atual da unidade</small></div></button>)}
     </section>
+    <section className="dashboard-panel attention-panel"><div className="dashboard-panel-head"><div><span>Prioridades</span><h2>Ordens que precisam de atenção</h2></div><small>Vencidas ou com prazo nos próximos 3 dias</small></div>{attentionOrders(orders).length===0 ? <p className="report-context">Nenhum serviço com prazo próximo ou vencido.</p> : <div className="compact-list">{attentionOrders(orders).map(o=><div key={o.id}><div><strong>{o.id} · {clientById.get(o.clientId)?.name}</strong><small>{o.device} · {o.status}</small></div><span className={o.dueDate<todayBR()?"danger-text":""}>{o.dueDate<todayBR()?"Atrasada · ":o.dueDate===todayBR()?"Vence hoje · ":"Prazo · "}{shortDate(o.dueDate)}</span><button type="button" className="panel-link" onClick={()=>onDetails(o.id)}>Abrir OS</button></div>)}</div>}</section>
     <section className="dashboard-grid dashboard-grid--summary">
       <article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>Atendimentos</span><h2>Ordens recentes</h2></div><button className="panel-link" type="button" onClick={() => onView("orders")}>Ver todas</button></div>{orders.length === 0 ? <EmptyState icon="file" title="Nenhuma ordem cadastrada" text="Crie a primeira ordem de serviço para acompanhar os atendimentos." action={<button className="text-action" type="button" onClick={onNewOrder}>Criar ordem</button>} /> : <div className="compact-list">{orders.slice(0, 5).map((order) => <div key={order.id}><div><strong>{order.id} · {clientById.get(order.clientId)?.name ?? "Cliente removido"}</strong><small>{order.device} — {order.service}</small></div><span className={statusClass(order.status)}>{order.status}</span></div>)}</div>}</article>
       <article className="dashboard-panel"><div className="dashboard-panel-head"><div><span>Estoque</span><h2>Itens para reposição</h2></div><button className="panel-link" type="button" onClick={() => onView("stock")}>Abrir estoque</button></div>{stock.length === 0 ? <EmptyState icon="box" title="Estoque vazio" text="Cadastre produtos para controlar quantidades e reposição." /> : lowStock.length === 0 ? <EmptyState icon="box" title="Estoque em dia" text="Nenhum item atingiu a quantidade mínima." /> : <div className="stock-alert-list">{lowStock.slice(0, 5).map((item) => <div className="stock-alert" key={item.id}><span className="stock-alert-icon">!</span><div><strong>{item.name}</strong><small>Mínimo: {item.minimum}</small></div><b>{item.quantity} un.</b></div>)}</div>}</article>
@@ -570,12 +595,12 @@ function OrdersView({ orders, clients, statusFilter, onStatusFilter, onNew, onDe
   return <><PageHeader eyebrow="ATENDIMENTOS" title="Ordens de serviço" text="Crie, acompanhe, edite e finalize os serviços da assistência." action={<button className="dashboard-primary-action" type="button" onClick={onNew}><Icon name="plus" size={18} /> Nova ordem</button>} /><section className="dashboard-panel module-panel"><div className="module-toolbar"><label className="status-filter"><span>Filtrar por status</span><select value={statusFilter} onChange={(event) => onStatusFilter(event.target.value as "Todos" | OrderStatus)}><option>Todos</option>{ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></label><span>{orders.length} registro(s)</span></div>{orders.length === 0 ? <EmptyState icon="file" title="Nenhuma ordem encontrada" text="Cadastre uma ordem ou altere os filtros de busca." action={<button className="text-action" type="button" onClick={onNew}>Criar ordem</button>} /> : <div className="orders-table-wrap"><table className="orders-table orders-table--service"><thead><tr><th>Ordem</th><th>Cliente</th><th>Aparelho / serviço</th><th>Status</th><th>Prazo</th><th>Pagamento</th><th>Valor</th><th>Ações</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td><strong>{order.id}</strong>{order.parts.length > 0 && <small>{order.parts.reduce((total, part) => total + part.quantity, 0)} peça(s)</small>}</td><td>{clients.get(order.clientId)?.name ?? "Cliente removido"}</td><td><strong>{order.device}</strong><small>{order.service}</small></td><td><select className={statusClass(order.status)} value={order.status} onChange={(event) => onStatus(order.id, event.target.value as OrderStatus)}>{ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></td><td>{shortDate(order.dueDate)}</td><td><strong>{order.paymentStatus}</strong><small>{order.paymentMethod}</small></td><td>{money(order.value)}</td><td><div className="row-actions"><button className="row-action" type="button" onClick={() => onDetails(order.id)} aria-label={`Ver detalhes de ${order.id}`} title="Ver detalhes"><Icon name="eye" size={17} /></button><button className="row-action" type="button" onClick={() => onEdit(order.id)} aria-label={`Editar ${order.id}`} title="Editar"><Icon name="edit" size={17} /></button><button className="row-action" type="button" onClick={() => onPrint(order)} aria-label={`Imprimir ${order.id}`} title="Imprimir"><Icon name="print" size={17} /></button><button className="row-action row-action--danger" type="button" onClick={() => onDelete(order)} aria-label={`Excluir ${order.id}`} title="Excluir"><Icon name="trash" size={17} /></button></div></td></tr>)}</tbody></table></div>}</section></>;
 }
 
-function ClientsView({ clients, onNew, onEdit, onDelete }: { clients: Client[]; onNew: () => void; onEdit: (id: string) => void; onDelete: (client: Client) => void }) {
-  return <><PageHeader eyebrow="RELACIONAMENTO" title="Clientes" text="Mantenha os dados de contato e identificação organizados." action={<button className="dashboard-primary-action" type="button" onClick={onNew}><Icon name="plus" size={18} /> Novo cliente</button>} /><section className="dashboard-panel module-panel"><div className="module-toolbar"><strong>Clientes cadastrados</strong><span>{clients.length} registro(s)</span></div>{clients.length === 0 ? <EmptyState icon="users" title="Nenhum cliente encontrado" text="Cadastre um cliente para iniciar uma ordem de serviço." action={<button className="text-action" type="button" onClick={onNew}>Cadastrar cliente</button>} /> : <div className="orders-table-wrap"><table className="orders-table"><thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>CPF/CNPJ</th><th>Cadastro</th><th>Ações</th></tr></thead><tbody>{clients.map((client) => <tr key={client.id}><td><strong>{client.name}</strong></td><td>{client.phone}</td><td>{client.email || "—"}</td><td>{client.document || "—"}</td><td>{shortDate(client.createdAt)}</td><td><div className="row-actions"><button className="row-action" type="button" onClick={() => onEdit(client.id)} aria-label={`Editar ${client.name}`}><Icon name="edit" size={17} /></button><button className="row-action row-action--danger" type="button" onClick={() => onDelete(client)} aria-label={`Excluir ${client.name}`}><Icon name="trash" size={17} /></button></div></td></tr>)}</tbody></table></div>}</section></>;
+function ClientsView({ clients, onNew, onEdit, onDelete, onHistory }: { onHistory: (id: string) => void; clients: Client[]; onNew: () => void; onEdit: (id: string) => void; onDelete: (client: Client) => void }) {
+  return <><PageHeader eyebrow="RELACIONAMENTO" title="Clientes" text="Mantenha os dados de contato e identificação organizados." action={<button className="dashboard-primary-action" type="button" onClick={onNew}><Icon name="plus" size={18} /> Novo cliente</button>} /><section className="dashboard-panel module-panel"><div className="module-toolbar"><strong>Clientes cadastrados</strong><span>{clients.length} registro(s)</span></div>{clients.length === 0 ? <EmptyState icon="users" title="Nenhum cliente encontrado" text="Cadastre um cliente para iniciar uma ordem de serviço." action={<button className="text-action" type="button" onClick={onNew}>Cadastrar cliente</button>} /> : <div className="orders-table-wrap"><table className="orders-table"><thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>CPF/CNPJ</th><th>Cadastro</th><th>Ações</th></tr></thead><tbody>{clients.map((client) => <tr key={client.id}><td><button type="button" className="panel-link" onClick={() => onHistory(client.id)}>{client.name}</button><small>Ver histórico e aparelhos</small></td><td>{client.phone}</td><td>{client.email || "—"}</td><td>{client.document || "—"}</td><td>{shortDate(client.createdAt)}</td><td><div className="row-actions"><button className="row-action" type="button" onClick={() => onEdit(client.id)} aria-label={`Editar ${client.name}`}><Icon name="edit" size={17} /></button><button className="row-action row-action--danger" type="button" onClick={() => onDelete(client)} aria-label={`Excluir ${client.name}`}><Icon name="trash" size={17} /></button></div></td></tr>)}</tbody></table></div>}</section></>;
 }
 
-function StockView({ stock, onNew, onEdit, onDelete, onQuantity }: { stock: StockItem[]; onNew: () => void; onEdit: (id: string) => void; onDelete: (item: StockItem) => void; onQuantity: (id: string, amount: number) => void }) {
-  return <><PageHeader eyebrow="CONTROLE DE PEÇAS" title="Estoque" text="Cadastre produtos e registre entradas ou saídas de quantidade." action={<button className="dashboard-primary-action" type="button" onClick={onNew}><Icon name="plus" size={18} /> Novo produto</button>} /><section className="dashboard-panel module-panel"><div className="module-toolbar"><strong>Produtos cadastrados</strong><span>{stock.length} registro(s)</span></div>{stock.length === 0 ? <EmptyState icon="box" title="Nenhum produto encontrado" text="Adicione o primeiro item para começar o controle de estoque." action={<button className="text-action" type="button" onClick={onNew}>Adicionar produto</button>} /> : <div className="orders-table-wrap"><table className="orders-table"><thead><tr><th>Produto</th><th>SKU</th><th>Quantidade</th><th>Estoque mínimo</th><th>Custo</th><th>Venda</th><th>Ações</th></tr></thead><tbody>{stock.map((item) => <tr key={item.id}><td><strong>{item.name}</strong>{item.quantity <= item.minimum && <small className="danger-text">Reposição necessária</small>}</td><td>{item.sku || "—"}</td><td><div className="quantity-control"><button type="button" onClick={() => onQuantity(item.id, -1)} aria-label={`Retirar uma unidade de ${item.name}`}><Icon name="minus" size={14} /></button><strong>{item.quantity}</strong><button type="button" onClick={() => onQuantity(item.id, 1)} aria-label={`Adicionar uma unidade de ${item.name}`}><Icon name="plus" size={14} /></button></div></td><td>{item.minimum}</td><td>{money(item.cost)}</td><td>{money(item.price)}</td><td><div className="row-actions"><button className="row-action" type="button" onClick={() => onEdit(item.id)} aria-label={`Editar ${item.name}`}><Icon name="edit" size={17} /></button><button className="row-action row-action--danger" type="button" onClick={() => onDelete(item)} aria-label={`Excluir ${item.name}`}><Icon name="trash" size={17} /></button></div></td></tr>)}</tbody></table></div>}</section></>;
+function StockView({ insights, stock, onNew, onEdit, onDelete, onQuantity }: { insights: Insights; stock: StockItem[]; onNew: () => void; onEdit: (id: string) => void; onDelete: (item: StockItem) => void; onQuantity: (id: string, amount: number) => void }) {
+  return <><PageHeader eyebrow="CONTROLE DE PEÇAS" title="Estoque" text="Cadastre produtos e registre entradas ou saídas de quantidade." action={<button className="dashboard-primary-action" type="button" onClick={onNew}><Icon name="plus" size={18} /> Novo produto</button>} /><section className="dashboard-panel module-panel"><div className="module-toolbar"><strong>Produtos cadastrados</strong><span>{stock.length} registro(s)</span></div>{stock.length === 0 ? <EmptyState icon="box" title="Nenhum produto encontrado" text="Adicione o primeiro item para começar o controle de estoque." action={<button className="text-action" type="button" onClick={onNew}>Adicionar produto</button>} /> : <div className="orders-table-wrap"><table className="orders-table"><thead><tr><th>Produto</th><th>SKU</th><th>Quantidade</th><th>Estoque mínimo</th><th>Custo</th><th>Venda</th><th>Ações</th></tr></thead><tbody>{stock.map((item) => <tr key={item.id}><td><strong>{item.name}</strong>{item.quantity <= item.minimum && <small className="danger-text">Reposição necessária</small>}</td><td>{item.sku || "—"}</td><td><div className="quantity-control"><button type="button" onClick={() => onQuantity(item.id, -1)} aria-label={`Retirar uma unidade de ${item.name}`}><Icon name="minus" size={14} /></button><strong>{item.quantity}</strong><button type="button" onClick={() => onQuantity(item.id, 1)} aria-label={`Adicionar uma unidade de ${item.name}`}><Icon name="plus" size={14} /></button></div></td><td>{item.minimum}</td><td>{money(item.cost)}</td><td>{money(item.price)}</td><td><div className="row-actions"><button className="row-action" type="button" onClick={() => onEdit(item.id)} aria-label={`Editar ${item.name}`}><Icon name="edit" size={17} /></button><button className="row-action row-action--danger" type="button" onClick={() => onDelete(item)} aria-label={`Excluir ${item.name}`}><Icon name="trash" size={17} /></button></div></td></tr>)}</tbody></table></div>}</section><StockInsights stock={stock} insights={insights} onEdit={onEdit} onQuantity={onQuantity} /></>;
 }
 
 function ReportsView({ orders, stock, lowStock, clientsCount, revenue, projectedRevenue, stockValue, start, end, onStart, onEnd, onExport, onPrint }: { orders: ServiceOrder[]; stock: StockItem[]; lowStock: StockItem[]; clientsCount: number; revenue: number; projectedRevenue: number; stockValue: number; start: string; end: string; onStart: (value: string) => void; onEnd: (value: string) => void; onExport: () => void; onPrint: () => void }) {
@@ -621,14 +646,16 @@ function ReportsView({ orders, stock, lowStock, clientsCount, revenue, projected
   </>;
 }
 
-function NotificationsView({ lowStock, readyOrders, waitingPieceOrders, clients, onView }: { lowStock: StockItem[]; readyOrders: ServiceOrder[]; waitingPieceOrders: ServiceOrder[]; clients: Map<string, Client>; onView: (view: View) => void }) {
-  const total = lowStock.length + readyOrders.length + waitingPieceOrders.length;
+function NotificationsView({ attention, pendingCount, onDetails, lowStock, readyOrders, waitingPieceOrders, clients, onView }: { attention: ServiceOrder[]; pendingCount: number; onDetails: (id: string) => void; lowStock: StockItem[]; readyOrders: ServiceOrder[]; waitingPieceOrders: ServiceOrder[]; clients: Map<string, Client>; onView: (view: View) => void }) {
+  const total = lowStock.length + readyOrders.length + waitingPieceOrders.length + attention.length + pendingCount;
 
   return <>
     <PageHeader eyebrow="ACOMPANHAMENTO" title="Notificações" text="Alertas gerados automaticamente pelos registros atuais do sistema." />
     <section className="dashboard-panel module-panel notification-panel">
       <div className="module-toolbar"><strong>Alertas ativos</strong><span>{total} notificação(ões)</span></div>
       {total === 0 ? <EmptyState icon="bell" title="Nenhuma notificação" text="O estoque está em dia e não há ordens aguardando atenção." /> : <div className="notification-list">
+        {pendingCount>0 && <article className="notification-item"><div><strong>{pendingCount} cadastro(s) aguardando aprovação</strong><p>A dona pode autorizar os novos acessos.</p></div><button type="button" className="panel-link" onClick={()=>onView("team")}>Revisar acessos</button></article>}
+        {attention.map(o=><article className="notification-item notification-item--warning" key={`due-${o.id}`}><div><strong>{o.dueDate<todayBR()?"Prazo vencido":"Prazo próximo"} · {o.id}</strong><p>{o.device} · {shortDate(o.dueDate)}</p></div><button type="button" className="panel-link" onClick={()=>onDetails(o.id)}>Ver ordem</button></article>)}
         {lowStock.map((item) => <article className="notification-item notification-item--warning" key={`stock-${item.id}`}>
           <span className="notification-item-icon"><Icon name="box" /></span>
           <div><strong>Reposição necessária</strong><p><b>{item.name}</b> está com {item.quantity} unidade(s); o mínimo definido é {item.minimum}.</p></div>
@@ -657,40 +684,63 @@ function StockForm({ item, onSubmit }: { item?: StockItem; onSubmit: (event: For
   return <><div className="system-modal-head"><span>ESTOQUE</span><h2 id="modal-title">{item ? "Editar produto" : "Novo produto"}</h2><p>Defina os valores e a quantidade disponível.</p></div><form className="system-form" onSubmit={onSubmit}><div className="system-form-grid"><label><span>Nome do produto *</span><input name="name" defaultValue={item?.name} required maxLength={100} autoFocus /></label><label><span>SKU ou código</span><input name="sku" defaultValue={item?.sku} maxLength={40} /></label></div><div className="system-form-grid"><label><span>Quantidade *</span><input name="quantity" type="number" defaultValue={item?.quantity ?? 0} required min="0" step="1" /></label><label><span>Estoque mínimo *</span><input name="minimum" type="number" defaultValue={item?.minimum ?? 0} required min="0" step="1" /></label></div><div className="system-form-grid"><label><span>Custo unitário *</span><input name="cost" type="number" defaultValue={item?.cost ?? 0} required min="0" step="0.01" /></label><label><span>Preço de venda *</span><input name="price" type="number" defaultValue={item?.price ?? 0} required min="0" step="0.01" /></label></div><button className="dashboard-primary-action" type="submit">{item ? "Salvar alterações" : "Cadastrar produto"}</button></form></>;
 }
 
-function OrderForm({ clients, stock, order, onSubmit }: { clients: Client[]; stock: StockItem[]; order?: ServiceOrder; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+function OrderForm({ clients, stock, order, onSubmit, devices, initialClientId }: { devices: Device[]; initialClientId: string; clients: Client[]; stock: StockItem[]; order?: ServiceOrder; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  const [clientId, setClientId] = useState(order?.clientId ?? initialClientId);
+  const [deviceId, setDeviceId] = useState(order?.deviceId ?? "");
+  const [device, setDevice] = useState(order?.device ?? "");
+  const [imei, setImei] = useState(order?.imei ?? "");
+  const [color, setColor] = useState(order?.color ?? "");
+  const [service, setService] = useState(order?.service ?? "");
+  const [diagnosis, setDiagnosis] = useState(order?.diagnosis ?? "");
+  const [summary, setSummary] = useState(order?.summary ?? "");
+  const [notes, setNotes] = useState(order?.notes ?? "");
+  const [partsQty, setPartsQty] = useState<Record<string, number>>(()=>Object.fromEntries((order?.parts ?? []).map(p=>[p.stockItemId,p.quantity])));
+  const [labor, setLabor] = useState(order?.labor ?? Math.max(0,(order?.value??0)-(order?.parts??[]).reduce((t,p)=>t+p.quantity*p.unitPrice,0)));
+  const [discount, setDiscount] = useState(order?.discount ?? 0);
+  const partTotal = stock.reduce((t,item)=>t+(partsQty[item.id]??0)*(order?.parts.find(p=>p.stockItemId===item.id)?.unitPrice??item.price),0)+(order?.parts??[]).filter(p=>!stock.some(i=>i.id===p.stockItemId)).reduce((t,p)=>t+p.quantity*p.unitPrice,0);
   const existingParts = new Map((order?.parts ?? []).map((part) => [part.stockItemId, part.quantity]));
 
   return <>
     <div className="system-modal-head"><span>ATENDIMENTOS</span><h2 id="modal-title">{order ? `Editar ${order.id}` : "Nova ordem de serviço"}</h2><p>Registre atendimento, prazo, pagamento e peças utilizadas.</p></div>
     <form className="system-form order-form" onSubmit={onSubmit}>
       <fieldset><legend>Atendimento</legend>
-        <label><span>Cliente *</span><select name="clientId" defaultValue={order?.clientId ?? ""} required autoFocus><option value="">Selecione um cliente</option>{clients.map((client) => <option value={client.id} key={client.id}>{client.name}</option>)}</select></label>
-        <div className="system-form-grid"><label><span>Aparelho *</span><input name="device" defaultValue={order?.device} required maxLength={80} placeholder="Ex.: iPhone 13" /></label><label><span>Técnico responsável *</span><input name="technician" defaultValue={order?.technician} required maxLength={80} placeholder="Nome do técnico" /></label></div>
-        <label><span>Defeito ou serviço solicitado *</span><textarea name="service" defaultValue={order?.service} required maxLength={300} rows={3} placeholder="Descreva o defeito relatado e o serviço solicitado" /></label>
+        <label><span>Cliente *</span><select name="clientId" value={clientId} onChange={e=>{setClientId(e.target.value);setDeviceId("");setDevice("");setImei("");setColor("");}} required autoFocus><option value="">Selecione um cliente</option>{clients.map((client) => <option value={client.id} key={client.id}>{client.name}</option>)}</select></label>
+        <label><span>Aparelho do cliente</span><select name="deviceId" value={deviceId} onChange={e=>{const d=devices.find(d=>d.id===e.target.value);setDeviceId(e.target.value);setDevice(d?.device??"");setImei(d?.imei??"");setColor(d?.color??"");}}><option value="">Cadastrar novo aparelho</option>{devices.filter(d=>d.clientId===clientId).map(d=><option key={d.id} value={d.id}>{d.device}{d.imei?` · ${d.imei}`:""}</option>)}</select></label>
+        <div className="system-form-grid"><label><span>Aparelho *</span><input name="device" value={device} onChange={e=>{setDevice(e.target.value);setDeviceId("");}} required maxLength={80} placeholder="Ex.: iPhone 13" /></label><label><span>Técnico responsável *</span><input name="technician" defaultValue={order?.technician} required maxLength={80} placeholder="Nome do técnico" /></label></div>
+        <div className="system-form-grid"><label><span>IMEI / Nº de série</span><input name="imei" value={imei} onChange={e=>setImei(e.target.value)} maxLength={80}/></label><label><span>Cor</span><input name="color" value={color} onChange={e=>setColor(e.target.value)} maxLength={60}/></label></div>
+        <label><span>Defeito ou serviço solicitado *</span><textarea name="service" value={service} onChange={e=>setService(e.target.value)} required maxLength={300} rows={3} placeholder="Descreva o defeito relatado e o serviço solicitado" /></label>
         <div className="system-form-grid"><label><span>Status *</span><select name="status" defaultValue={order?.status ?? "Em análise"}>{ORDER_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></label><label><span>Prazo de entrega *</span><input name="dueDate" type="date" defaultValue={order?.dueDate} required /></label></div>
       </fieldset>
 
+      <fieldset><legend>Diagnóstico e acompanhamento</legend>
+        <label><span>Etapa do atendimento</span><select name="stage" defaultValue={order?.stage||"Recebido"}>{order?.stage && !STAGES.includes(order.stage) && <option>{order.stage}</option>}{STAGES.map(s=><option key={s}>{s}</option>)}</select></label>
+        <label><span>Diagnóstico técnico</span><textarea name="diagnosis" value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} rows={4} maxLength={4000}/></label>
+        <AiAssistant mode="diagnosis" context={{device,service,diagnosis}} onApply={text=>setDiagnosis(previous=>previous ? previous+"\n\n"+text : text)}/>
+        <label><span>Resumo do serviço para o cliente</span><textarea name="summary" value={summary} onChange={e=>setSummary(e.target.value)} rows={4} maxLength={4000}/></label>
+        <AiAssistant mode="summary" context={{device,service,diagnosis,notes,parts:stock.filter(i=>(partsQty[i.id]??0)>0).map(i=>i.name)}} onApply={setSummary}/>
+      </fieldset>
       <fieldset><legend>Pagamento</legend>
         <div className="system-form-grid"><label><span>Forma de pagamento *</span><select name="paymentMethod" defaultValue={order?.paymentMethod ?? "A definir"}>{PAYMENT_METHODS.map((method) => <option key={method}>{method}</option>)}</select></label><label><span>Situação *</span><select name="paymentStatus" defaultValue={order?.paymentStatus ?? "Pendente"}>{PAYMENT_STATUSES.map((status) => <option key={status}>{status}</option>)}</select></label></div>
-        <label><span>Valor total do serviço *</span><input name="value" type="number" required min="0" step="0.01" defaultValue={order?.value ?? 0} /></label>
+        <div className="system-form-grid"><label><span>Mão de obra (R$) *</span><input name="labor" type="number" required min="0" step="0.01" value={labor} onChange={e=>setLabor(Number(e.target.value))}/></label><label><span>Desconto (R$)</span><input name="discount" type="number" required min="0" max={labor+partTotal} step="0.01" value={discount} onChange={e=>setDiscount(Number(e.target.value))}/></label></div><p>Peças: <strong>{money(partTotal)}</strong></p><label><span>Valor total do serviço *</span><input name="value" type="number" min="0" step="0.01" readOnly value={Math.round((labor+partTotal-discount)*100)/100}/></label>
       </fieldset>
 
       <fieldset><legend>Peças utilizadas</legend>
         {stock.length === 0 ? <p className="order-form-note">Nenhum produto cadastrado no estoque. A ordem poderá ser salva sem peças.</p> : <div className="order-parts-list">{stock.map((item) => {
           const currentQuantity = existingParts.get(item.id) ?? 0;
           const available = item.quantity + currentQuantity;
-          return <label className="order-part-row" key={item.id}><span><strong>{item.name}</strong><small>{item.sku || "Sem SKU"} · {available} disponível(is)</small></span><input name={`part-${item.id}`} type="number" min="0" max={available} step="1" defaultValue={currentQuantity} aria-label={`Quantidade de ${item.name} utilizada`} /></label>;
+          return <label className="order-part-row" key={item.id}><span><strong>{item.name}</strong><small>{item.sku || "Sem SKU"} · {available} disponível(is)</small></span><input name={`part-${item.id}`} type="number" min="0" max={available} step="1" value={partsQty[item.id]??0} onChange={e=>setPartsQty(q=>({...q,[item.id]:Number(e.target.value)}))} aria-label={`Quantidade de ${item.name} utilizada`} /></label>;
         })}</div>}
         <p className="order-form-note">As quantidades informadas serão baixadas automaticamente do estoque ao salvar.</p>
       </fieldset>
 
-      <fieldset><legend>Observações</legend><label><span>Informações adicionais</span><textarea name="notes" defaultValue={order?.notes} maxLength={800} rows={3} placeholder="Condições do aparelho, garantia, orientações ao cliente..." /></label></fieldset>
+      <fieldset><legend>Observações</legend><label><span>Informações adicionais</span><textarea name="notes" value={notes} onChange={e=>setNotes(e.target.value)} maxLength={800} rows={3} placeholder="Condições do aparelho, garantia, orientações ao cliente..." /></label></fieldset>
       <button className="dashboard-primary-action" type="submit">{order ? "Salvar alterações" : "Criar ordem de serviço"}</button>
     </form>
   </>;
 }
 
-function OrderDetails({ order, client, onEdit, onPrint }: { order: ServiceOrder; client?: Client; onEdit: () => void; onPrint: () => void }) {
+function OrderDetails({ order, client, onEdit, onPrint, onEvent }: { onEvent: (event: string) => Promise<boolean>; order: ServiceOrder; client?: Client; onEdit: () => void; onPrint: () => void }) {
+  const [eventText, setEventText] = useState("");
   const partsTotal = order.parts.reduce((total, part) => total + part.quantity * part.unitPrice, 0);
 
   return <>
@@ -698,15 +748,48 @@ function OrderDetails({ order, client, onEdit, onPrint }: { order: ServiceOrder;
     <div className="order-details-actions"><button className="secondary-action" type="button" onClick={onEdit}><Icon name="edit" size={17} /> Editar ordem</button><button className="dashboard-primary-action" type="button" onClick={onPrint}><Icon name="print" size={17} /> Imprimir comprovante</button></div>
     <div className="order-details-grid">
       <section><span>Cliente</span><strong>{client?.name ?? "Cliente removido"}</strong><small>{client?.phone ?? "Sem telefone"}</small></section>
-      <section><span>Aparelho</span><strong>{order.device}</strong><small>{order.service}</small></section>
+      <section><span>Aparelho</span><strong>{order.device}</strong><small>{order.service}</small><small>IMEI / série: {order.imei || "Não informado"} · Cor: {order.color || "Não informada"}</small></section>
       <section><span>Técnico responsável</span><strong>{order.technician || "Não definido"}</strong><small>Prazo: {shortDate(order.dueDate)}</small></section>
       <section><span>Status atual</span><strong>{order.status}</strong><small>{order.paymentStatus} · {order.paymentMethod}</small></section>
     </div>
+    <section className="order-details-section"><div className="order-details-title"><h3>Status do serviço</h3><strong>{order.stage||order.status} · estado atual</strong></div><div className="os-steps">{STAGES.map(s=><span key={s} aria-current={order.stage===s?"step":undefined} className={order.stage===s?"is-current":""}>{s}</span>)}</div></section>
+    <section className="order-details-section"><h3>Diagnóstico</h3><p className="preserve-lines">{order.diagnosis||"Ainda não registrado."}</p></section>
+    {order.summary && <section className="order-details-section"><h3>Resumo do serviço</h3><p className="preserve-lines">{order.summary}</p></section>}
     <div className="order-details-columns">
       <section className="order-details-section"><div className="order-details-title"><h3>Peças utilizadas</h3><strong>{money(partsTotal)}</strong></div>{order.parts.length === 0 ? <p className="order-details-empty">Nenhuma peça vinculada.</p> : <div className="order-detail-parts">{order.parts.map((part) => <div key={part.stockItemId}><span><strong>{part.name}</strong><small>{part.quantity} × {money(part.unitPrice)}</small></span><b>{money(part.quantity * part.unitPrice)}</b></div>)}</div>}</section>
       <section className="order-details-section"><div className="order-details-title"><h3>Histórico</h3></div>{order.history.length === 0 ? <p className="order-details-empty">Nenhuma alteração registrada.</p> : <ol className="order-history">{[...order.history].reverse().map((entry) => <li key={entry.id}><span /><div><strong>{entry.action}</strong><small>{dateTime(entry.at)}</small></div></li>)}</ol>}</section>
     </div>
     {order.notes && <section className="order-details-section order-notes"><div className="order-details-title"><h3>Observações</h3></div><p>{order.notes}</p></section>}
+    <form className="system-form" onSubmit={async e=>{e.preventDefault();if(await onEvent(eventText))setEventText("");}}><label><span>Registrar evento no histórico</span><input value={eventText} onChange={e=>setEventText(e.target.value)} maxLength={400} required placeholder="Ex.: Peça recebida; testes funcionais concluídos"/></label><button type="submit" className="secondary-action">Registrar agora</button></form>
+    <div className="price-breakdown"><span>Serviço: {money(order.labor??Math.max(0,order.value-partsTotal))}</span><span>Peças: {money(partsTotal)}</span><span>Desconto: {money(order.discount??0)}</span></div>
     <div className="order-details-total"><span>Valor total do serviço</span><strong>{money(order.value)}</strong></div>
   </>;
+}
+
+function AiAssistant({mode, context, onApply}: { mode: "diagnosis" | "summary"; context: Record<string, unknown>; onApply: (text: string) => void }) {
+  const [loading,setLoading]=useState(false),[result,setResult]=useState(""),[error,setError]=useState("");
+  const generate=async()=>{setLoading(true);setError("");setResult("");try{const r=await fetch("/api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,context})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Falha ao gerar sugestão.");setResult(d.text);}catch(e){setError(e instanceof Error?e.message:"Falha de conexão.");}finally{setLoading(false);}};
+  return <div className="ai-assistant"><div><strong>{mode==="diagnosis"?"Diagnóstico assistido":"Resumo com IA"}</strong><p>{mode==="diagnosis"?"Sugestões de possíveis causas e verificações. A decisão permanece com o técnico.":"Rascunho baseado nas informações preenchidas. Revise antes de salvar."} O texto técnico será enviado à OpenAI; não inclua dados pessoais.</p></div><button type="button" className="secondary-action" disabled={loading} onClick={generate}>{loading?"Gerando…":mode==="diagnosis"?"Sugerir diagnóstico":"Gerar resumo"}</button>{error&&<p role="alert">{error}</p>}{result&&<><p className="preserve-lines">{result}</p><button type="button" className="text-action" onClick={()=>{onApply(result);setResult("");}}>Usar este rascunho</button><small>Salve a OS para registrar o texto revisado.</small></>}</div>;
+}
+
+function LoyaltyView({clients, insights, selected, onSelect, onNew, onVisit}: {clients:Client[];insights:Insights;selected:string;onSelect:(id:string)=>void;onNew:(id:string)=>void;onVisit:(visit:Visit)=>void}) {
+ const [segment,setSegment]=useState("all");
+ const cutoff=new Date();cutoff.setFullYear(cutoff.getFullYear()-1);
+ const validVisits=insights.visits.filter(v=>v.status!=="cancelado");
+ const visible=clients.filter(c=>{const visits=validVisits.filter(v=>v.clientId===c.id);return segment==="all" || (segment==="notebook" && visits.some(v=>/notebook|laptop/i.test(v.device)&&new Date(v.createdAt)>=cutoff)) || (segment==="inactive" && visits.length>0 && visits.every(v=>new Date(v.createdAt)<cutoff));});
+ const client=visible.find(c=>c.id===selected)??visible[0];
+ const visits=client?insights.visits.filter(v=>v.clientId===client.id):[];
+ const counted=visits.filter(v=>v.status!=="cancelado");
+ const frequent=(values:string[])=>{const counts=new Map<string,number>();values.forEach(v=>counts.set(v,(counts.get(v)??0)+1));return [...counts].sort((a,b)=>b[1]-a[1]).map(([v,n])=>`${v} (${n})`);};
+ return <><PageHeader eyebrow="RELACIONAMENTO" title="Fidelidade e histórico" text="Conheça os atendimentos de cada cliente nas duas unidades."/><section className="dashboard-panel module-panel"><div className="module-toolbar"><label className="status-filter"><span>Grupo de clientes</span><select value={segment} onChange={e=>setSegment(e.target.value)}><option value="all">Todos os clientes</option><option value="notebook">Notebook nos últimos 12 meses</option><option value="inactive">Sem retorno há mais de 1 ano</option></select></label><span>{visible.length} cliente(s)</span></div><div className="loyalty-layout"><aside aria-label="Escolher cliente">{visible.map(c=><button type="button" key={c.id} className={c.id===client?.id?"selected":""} onClick={()=>onSelect(c.id)}><strong>{c.name}</strong><small>{c.phone}</small></button>)}</aside>{client?<article className="customer-profile"><div className="dashboard-panel-head"><div><h2>{client.name}</h2><p>{client.phone}</p></div><button type="button" className="dashboard-primary-action" onClick={()=>onNew(client.id)}>+ Novo atendimento</button></div><div className="profile-metrics"><div><span>Atendimentos</span><strong>{counted.length}</strong></div><div><span>Último atendimento</span><strong>{shortDate(counted[0]?.createdAt??"")}</strong></div><div><span>Aparelho mais atendido</span><strong>{frequent(counted.map(v=>v.device))[0]??"—"}</strong></div><div><span>Unidade mais utilizada</span><strong>{frequent(counted.map(v=>v.store))[0]??"—"}</strong></div>{insights.isOwner&&<div><span>Total em serviços entregues · somente dono</span><strong>{money(insights.customerSpend[client.id]??0)}</strong></div>}</div><h3>Serviços mais frequentes</h3><p>{frequent(counted.map(v=>v.service)).slice(0,3).join(" · ")||"Nenhum atendimento registrado."}</p><h3>Aparelhos e histórico</h3>{insights.devices.filter(d=>d.clientId===client.id).map(d=><section key={d.id} className="customer-device"><h4>{d.device}</h4><p>{d.imei?`IMEI / série: ${d.imei}`:"Sem identificação de série"}{d.color?` · ${d.color}`:""}</p>{visits.filter(v=>v.deviceId===d.id).map(v=><button type="button" className="visit-card" key={v.id} onClick={()=>onVisit(v)}><strong>{v.id} · {shortDate(v.createdAt)} · {v.store}</strong><span>{v.summary||v.service}</span><small>{v.status==="cancelado"?"Cancelado · ":""}Abrir ordem de serviço →</small></button>)}</section>)}</article>:<EmptyState icon="users" title="Nenhum cliente neste grupo" text="Altere o filtro ou a busca para consultar outros clientes."/>}</div></section></>;
+}
+
+function StockInsights({stock, insights, onEdit, onQuantity}: {stock:StockItem[];insights:Insights;onEdit:(id:string)=>void;onQuantity:(id:string,amount:number)=>void}) {
+ return <><section className="dashboard-panel stock-insights"><div className="dashboard-panel-head"><div><span>Planejamento</span><h2>Consumo e reposição</h2></div></div><p className="report-context">Consumo líquido registrado nos últimos 90 dias, dividido por 3 meses. Projeção linear; sugestão para 60 dias ou o mínimo configurado, o que for maior.</p><div className="forecast-grid">{stock.map(item=>{const consumed=insights.consumption[item.id]??0;const monthly=consumed/3;const days=consumed>0?Math.floor(item.quantity/(consumed/90)):null;const buy=Math.max(0,Math.ceil(Math.max(item.minimum,monthly*2)-item.quantity));return <article key={item.id}><h3>{item.name}</h3><p>Saldo atual: <strong>{item.quantity} un.</strong> · Mínimo: {item.minimum}</p><p>Consumo médio: <strong>{monthly.toLocaleString("pt-BR",{maximumFractionDigits:1})} un./mês</strong></p><p className={item.quantity===0||(days!==null&&days<=30)?"danger-text":""}>{item.quantity===0?"Sem estoque disponível":days===null?"Sem consumo registrado para estimar cobertura.":`Cobertura estimada: ${days} dias${days<=30?" · risco de ruptura":""}`}</p><p>Sugestão de compra: <strong>{buy} unidade(s)</strong></p><div className="report-actions"><button type="button" className="text-action" onClick={()=>onEdit(item.id)}>Ver item</button><button type="button" className="secondary-action" onClick={()=>onQuantity(item.id,1)}>Registrar entrada +1</button></div></article>;})}</div></section><section className="dashboard-panel stock-insights"><div className="dashboard-panel-head"><div><span>Rastreabilidade</span><h2>Últimas movimentações</h2></div><small>Até 100 registros da unidade</small></div>{insights.movements.length===0?<p className="report-context">Nenhuma movimentação registrada.</p>:<div className="compact-list">{insights.movements.map(m=><div key={m.id}><div><strong>{m.name} · {m.quantity} un.</strong><small>{m.note||m.type} · {dateTime(m.createdAt)}</small></div><span>{m.before===null||m.after===null?"Saldo histórico indisponível":`${m.before} → ${m.after}`}</span></div>)}</div>}</section></>;
+}
+
+function TeamView({members,onRefresh}:{members:TeamMember[];onRefresh:()=>Promise<void>}) {
+ const [pending,setPending]=useState<string|null>(null),[error,setError]=useState("");
+ const decide=async(id:string,decision:string)=>{if(pending)return;setPending(id);setError("");try{const r=await fetch("/api/access",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id,decision})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Não foi possível atualizar o acesso.");await onRefresh();}catch(e){setError(e instanceof Error?e.message:"Falha de conexão.");}finally{setPending(null);}};
+ return <><PageHeader eyebrow="ADMINISTRAÇÃO" title="Aprovação de acessos" text="Novas contas ficam pendentes até a dona autorizar. A aprovação não depende da confirmação de e-mail."/>{error&&<p role="alert" className="system-feedback">{error}</p>}<section className="dashboard-panel module-panel"><div className="module-toolbar"><strong>{members.filter(m=>m.decision==="pendente").length} aguardando aprovação</strong></div><div className="team-list">{members.map(m=><article key={m.id}><div><strong>{m.name}</strong><p>{m.email}</p><small>{shortDate(m.createdAt)} · {m.role==="dono"?"Dona do sistema":m.decision}</small></div>{m.role!=="dono"&&<div className="report-actions">{!m.active&&<button type="button" className="dashboard-primary-action" disabled={!!pending} onClick={()=>decide(m.id,"aprovado")}>Aprovar acesso</button>}{m.decision==="pendente"&&<button type="button" className="secondary-action" disabled={!!pending} onClick={()=>decide(m.id,"recusado")}>Recusar</button>}{m.active&&<button type="button" className="secondary-action" disabled={!!pending} onClick={()=>decide(m.id,"suspenso")}>Suspender acesso</button>}</div>}</article>)}</div></section></>;
 }

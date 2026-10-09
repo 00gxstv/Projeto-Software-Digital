@@ -46,3 +46,6 @@ next-env.d.ts
 /site-deploy.tar.gz
 *.tsbuildinfo
 /supabase/.temp/
+
+# Intermediate migration inspection
+.work/

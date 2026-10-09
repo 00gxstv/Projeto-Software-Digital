@@ -106,3 +106,16 @@ The timeout defaults can be overridden for a controlled canary with `SITES_INSTA
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+
+## Central operacional, fidelidade e aprovação (outubro/2026)
+
+A migração `supabase/migrations/20261009120000_central_operacional.sql` é incremental e deve ser aplicada após a migração original. Preserva os campos existentes e a correção de exclusão de aparelhos sem OS. A configuração inicial do dono é feita por um administrador do projeto a partir da conta escolhida; cadastros nunca escolhem o próprio papel. Novos usuários entram pendentes. O dono aprova, recusa ou suspende na aba **Acessos**; a decisão e o autor ficam auditados. A equipe existente mantém acesso.
+
+- Central: posição atual da unidade, ordens vencidas ou com prazo em até três dias (data de São Paulo).
+- OS: IMEI/série, cor, aparelho já cadastrado, diagnóstico, resumo, etapas e eventos com horário; mão de obra + peças - desconto = total. Os campos anteriores continuam presentes.
+- Estoque: diferença entre peças novas e antigas é baixada na mesma transação da OS; edição sem mudança não baixa novamente. Cancelamento/exclusão devolvem peças. As novas movimentações registram saldos anterior e posterior; registros antigos não recebem saldos inventados.
+- Fidelidade: histórico das duas unidades; notebook nos últimos 12 meses; clientes com atendimento anterior mas sem retorno há mais de um ano. Cancelados não entram nos indicadores. Total por cliente aparece apenas para dono e considera serviços entregues (não é uma conciliação de pagamentos).
+- Previsão: consumo líquido em 90 dias / 3; cobertura = saldo / consumo diário. Sugestão para 60 dias, respeitando o mínimo. Sem consumo não há projeção de cobertura. Estoque e previsão são da unidade selecionada.
+- IA: `/api/ai` utiliza OpenAI Responses, com autenticação, aprovação, limite persistente de 5/minuto e 100/dia por usuário, timeout e `store:false`. Configure `OPENAI_API_KEY` como segredo **server-side** no Vercel e faça novo deployment. `OPENAI_MODEL` é opcional (`gpt-4.1-mini`). Sem chave, a tela informa indisponibilidade; não gera respostas simuladas. Não encaminha campos de cliente, telefone, IMEI ou valores. Textos livres devem conter somente dados técnicos. O técnico revisa e salva o rascunho explicitamente.
+
+Validação: `node --test tests/operational.test.mjs tests/supabase-integration.test.mjs`, `npx tsc --noEmit`, `npm run vercel-build`.

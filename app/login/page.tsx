@@ -43,7 +43,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {registered && (
             <p className="auth-feedback auth-feedback--success" role="status">
-              Confira seu e-mail para confirmar o cadastro. O acesso aos dados será liberado pela responsável da equipe.
+              Cadastro recebido. Faça login para acompanhar sua aprovação pela dona da assistência. Se receber um e-mail de confirmação, confirme também seu endereço.
             </p>
           )}
           {["confirmar", "conexao", "link"].includes(first(params.erro)) && <p className="auth-feedback auth-feedback--error" role="alert">{first(params.erro) === "confirmar" ? "Confirme seu e-mail antes de entrar." : first(params.erro) === "link" ? "O link expirou ou foi aberto em outro navegador. Solicite um novo link e abra no mesmo navegador." : "Não foi possível conectar. Tente novamente em instantes."}</p>}

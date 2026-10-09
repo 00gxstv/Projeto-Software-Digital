@@ -1,0 +1,41 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { PGlite } from '@electric-sql/pglite';
+test('Central: aprovação, dados da OS, saldo e histórico entre unidades',async()=>{
+ const db=new PGlite();try{
+ await db.exec(`create role anon;create role authenticated;create schema auth;create table auth.users(id uuid primary key,email text,email_confirmed_at timestamptz,is_anonymous boolean default false,raw_user_meta_data jsonb default '{}');create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;grant usage on schema auth,public to authenticated,anon;grant execute on function auth.uid() to authenticated,anon;`);
+ await db.exec(await readFile(new URL('./fixtures/digital-mais-original.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/20261003014305_conectar_digital_mais.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../supabase/migrations/20261009120000_central_operacional.sql',import.meta.url),'utf8'));
+ const owner='00000000-0000-0000-0000-000000000001',team='00000000-0000-0000-0000-000000000002';
+ await db.exec(`insert into auth.users(id,email,raw_user_meta_data) values('${owner}','owner@example.invalid','{}'),('${team}','team@example.invalid','{"role":"dono","ativo":true}');insert into lojas(nome,endereco) values('A','A'),('B','B');update digital_mais_acessos set papel='dono',ativo=true,decisao='aprovado' where user_id='${owner}';`);
+ const identity=async id=>db.exec(`reset role;set role authenticated;select set_config('request.jwt.claim.sub','${id}',false)`);
+ await identity(team);
+ assert.equal((await db.query('select ativo,papel from digital_mais_acessos')).rows[0].ativo,false);
+ assert.equal((await db.query('select ativo,papel from digital_mais_acessos')).rows[0].papel,'equipe');
+ await assert.rejects(db.query('select digital_mais_snapshot()'),/Acesso ainda/);
+ await assert.rejects(db.query(`select digital_mais_decide_access('${team}','aprovado')`),/Somente o dono/);
+ await assert.rejects(db.query(`update digital_mais_acessos set papel='dono'`),/permission denied/);
+ await identity(owner);await db.query(`select digital_mais_decide_access('${team}','aprovado')`);
+ const mutate=async(action,payload,store=1)=>(await db.query('select digital_mais_mutate($1,$2,$3::jsonb) result',[action,store,JSON.stringify(payload)])).rows[0].result;
+ const snapshot=async(store=1)=>(await db.query('select digital_mais_snapshot($1) result',[store])).rows[0].result;
+ await mutate('saveClient',{name:'Cliente teste',phone:'11'});await mutate('saveStock',{name:'Tela',sku:'TELA',quantity:8,minimum:8,cost:10,price:780});
+ let state=await snapshot();const stock=state.stock[0],client=state.clients[0];
+ let order={clientId:client.id,device:'iPhone 13',imei:'TEST-SERIAL',color:'Azul',diagnosis:'Falha identificada',summary:'Em diagnóstico',stage:'Diagnóstico concluído',service:'Não liga após queda',status:'Em reparo',technician:'Técnico',dueDate:'2026-10-09',paymentMethod:'Pix',paymentStatus:'Pendente',notes:'Preservada',value:1130,labor:350,discount:0,parts:[{stockItemId:stock.id,quantity:1,unitPrice:780}]};
+ await mutate('saveOrder',order);state=await snapshot();assert.equal(state.stock[0].quantity,7);assert.equal(state.orders[0].value,1130);assert.equal(state.orders[0].imei,'TEST-SERIAL');assert.equal(state.orders[0].diagnosis,'Falha identificada');assert.equal(state.orders[0].labor,350);assert.equal(state.movements[0].before,8);assert.equal(state.movements[0].after,7);
+ let saved=state.orders[0];await mutate('saveOrder',{...saved,notes:'Editada'});state=await snapshot();assert.equal(state.stock[0].quantity,7);assert.equal(state.consumption[stock.id],1);
+ await assert.rejects(mutate('saveOrder',{...saved,notes:'Conflito'}),/alterada por outra pessoa/);
+ saved=state.orders[0];await assert.rejects(mutate('saveOrder',{...saved,parts:[{stockItemId:stock.id,quantity:99,unitPrice:780}]}),/Estoque insuficiente/);assert.equal((await snapshot()).stock[0].quantity,7);
+ await mutate('event',{id:saved.id,version:saved.version,event:'Peça recebida'});state=await snapshot();assert.equal(state.orders[0].history.at(-1).action,'Peça recebida');
+ await mutate('status',{id:saved.id,version:state.orders[0].version,status:'Entregue'});state=await snapshot();assert.equal(state.customerSpend[client.id],1130);
+ assert.equal((await snapshot(2)).visits.length,1);assert.equal((await snapshot(2)).orders.length,0);
+ await identity(team);state=await snapshot();assert.equal(state.isOwner,false);assert.deepEqual(state.customerSpend,{});assert.deepEqual(state.team,[]);
+ await assert.rejects(db.query(`select digital_mais_decide_access('${owner}','suspenso')`),/Somente o dono/);
+ await mutate('status',{id:saved.id,version:state.orders[0].version,status:'Cancelado'});state=await snapshot();assert.equal(state.stock[0].quantity,8);assert.equal(state.consumption[stock.id],0);
+ await mutate('deleteOrder',{id:saved.id,version:state.orders[0].version});await mutate('deleteClient',{id:client.id,version:client.version});assert.equal((await snapshot()).clients.length,0);
+ for(let i=0;i<5;i++)assert.equal((await db.query('select digital_mais_ai_quota() ok')).rows[0].ok,true);assert.equal((await db.query('select digital_mais_ai_quota() ok')).rows[0].ok,false);
+ await identity(owner);await db.query(`select digital_mais_decide_access('${team}','suspenso')`);await identity(team);await assert.rejects(snapshot(),/Acesso ainda/);
+ await db.exec('reset role;set role anon');await assert.rejects(snapshot(),/permission denied/);
+ }finally{await db.close();}
+});
